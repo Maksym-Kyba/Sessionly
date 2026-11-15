@@ -9,10 +9,9 @@ at the Ukrainian Catholic University.
 
 ## Overview
 
-Sessionly is a web application that helps independent psychologists manage their appointments
-in one place. Psychologists publish their available hours; clients choose a time, pay online,
-and receive an automatically confirmed appointment. This removes the back-and-forth messaging
-about booking, payments and calendar updates.
+Sessionly helps independent psychologists publish available hours and lets clients book and pay
+for sessions without creating client accounts. Psychologists sign in exclusively with Google
+OAuth. Clients verify their email through a one-time link before booking.
 
 ## Problem
 
@@ -27,24 +26,28 @@ spreadsheets or separate calendar applications. This leads to:
 ## Target Users
 
 - **Psychologists:** independent psychologists in Ukraine who manage their own appointments
-  without an administrator.
-- **Clients:** people who book a session through a psychologist's personal booking link.
+  without an administrator and authenticate through Google OAuth.
+- **Clients:** people who book through a psychologist's personal booking link; clients do not
+  have Sessionly accounts.
 
 ## Features
 
-- **Accounts:** psychologists sign up, sign in and set up a profile.
-- **Availability:** psychologists set available hours for the next month, session length and price.
-- **Booking:** clients verify their email address and choose a free slot. The slot is reserved
-  for 15 minutes to complete payment; otherwise it becomes available again.
-- **Payment and confirmation:** clients pay in a sandbox payment environment. A successful
-  payment confirms the appointment automatically, without manual approval.
-- **Dashboard:** psychologists see upcoming appointments and their statuses
-  (scheduled, completed, cancelled).
-- **Google Calendar integration:** times marked as busy in the psychologist's Google Calendar
-  are hidden from clients; confirmed appointments are added to the calendar.
-- **AI scheduling assistant:** suggests a time for the next appointment based on booking history
-  and available slots, and drafts an invitation message. The psychologist decides whether to
-  send it.
+- **Psychologist access:** Google OAuth sign-in and profile setup.
+- **Availability:** psychologists set available hours, session length and price.
+- **Email verification and booking:** clients verify their email with a one-time link, choose a
+  free slot, and receive a 15-minute hold while completing payment.
+- **Payment and confirmation:** development supports mock payments without personal banking API
+  tokens. A valid payment confirmed before the hold expires can confirm the appointment.
+  A payment confirmed after hold expiry never automatically confirms the booking; it requires
+  manual review and may require a manual refund. The production payment provider is not finalized.
+- **Cancellation and rescheduling:** clients contact the psychologist directly. A client who
+  requests cancellation at least 24 hours before the scheduled session is eligible for a refund,
+  handled manually by the psychologist.
+- **Dashboard:** psychologists see upcoming appointments and their statuses.
+- **Google Calendar integration (MVP, later milestone):** busy times can be hidden from clients
+  and confirmed appointments can be added to the calendar.
+- **AI scheduling assistant (MVP, later milestone):** suggests a time based on booking history and
+  availability, and drafts an invitation message for the psychologist to review.
 
 ## Technology Stack
 
@@ -55,19 +58,22 @@ spreadsheets or separate calendar applications. This leads to:
 | PostgreSQL | Database |
 | SQLAlchemy, Alembic | Data access and schema migrations |
 | Docker Compose | Local development environment |
-| Google Calendar API | Calendar synchronisation |
-| WayForPay (sandbox) | Test payments |
-| OpenAI API | AI scheduling suggestions and message drafts |
+| Google OAuth | Psychologist sign-in |
+| Mock payments | Development payment flow; production provider TBD |
+| Google Calendar API | MVP calendar synchronisation (later milestone) |
+| OpenAI API | MVP AI scheduling suggestions and message drafts (later milestone) |
 
 ## Repository Structure
 
 ```
 Sessionly/
-├── backend/             # FastAPI application, database models, migrations, tests
+├── backend/             # FastAPI application, production Dockerfile, models, migrations, tests
 ├── frontend/            # Next.js application
-├── infra/               # Deployment configuration
+├── infra/               # Terraform deployment configuration
+├── docs/                # Product, API and database design documents
 ├── docker-compose.yml   # Local development environment
 ├── .env.example         # Template for environment variables
+├── AGENTS.md            # Repository-wide agent guidance
 └── README.md
 ```
 
@@ -78,55 +84,85 @@ database, divided into modules with clear boundaries.
 
 | Module | Responsibility |
 |---|---|
-| `accounts` | Psychologist registration, authentication and profile |
-| `availability` | Available hours, session length and price |
-| `booking` | Slot reservation, booking statuses, cancellation |
-| `payments` | Payment creation and provider webhook handling |
-| `calendar` | Google Calendar synchronisation |
-| `notifications` | Email verification codes and booking confirmations |
-| `assistant` | AI scheduling suggestions |
+| `accounts` | Psychologist Google OAuth identity and profile |
+| `availability` | Available hours, session length, price and published slots |
+| `booking` | Holds, booking statuses and appointment lifecycle |
+| `payments` | Payment attempts, mock development flow and future provider boundary |
+| `calendar` | Google Calendar synchronisation (MVP, later milestone) |
+| `notifications` | One-time email verification links and booking notifications |
+| `assistant` | AI scheduling suggestions (MVP, later milestone) |
 
 Modules communicate only through each module's public interface (`api.py`) and never access
 another module's tables. Within a module, code is layered as router → service → repository.
+Proposed endpoints and data structures are documented in `docs/API_CONTRACT.md` and
+`docs/DATABASE_DESIGN.md`; unapproved technical details are labeled **PROPOSED**.
 
-### Key Design Decisions
+### Key Product Rules
 
-- **No double booking.** A slot is reserved with a single atomic SQL statement that succeeds
-  only if the slot is free or its previous reservation has expired.
-- **Reservation expiry without timers.** A reservation whose `held_until` time has passed is
-  treated as free, so correctness does not depend on a background job.
-- **Payment confirmation by the server only.** A booking is confirmed only after the payment
-  provider's webhook is verified, never on the basis of a browser redirect. Webhooks are
-  processed idempotently, since providers may deliver them more than once.
-- **Replaceable payment provider.** The provider is accessed through a `PaymentGateway`
-  interface.
-- **Time zones.** All timestamps are stored in UTC; each psychologist has a time zone in their
-  profile, and the frontend displays times in the user's local time zone.
-- **Privacy.** Client data is treated as sensitive: personal data is not logged, and secrets
-  are never committed.
+- A booking hold expires exactly 15 minutes after creation. Expired holds must not block
+  reservations indefinitely; expiration and a replacement hold must be concurrency-safe and atomic.
+- Holds and confirmed appointments for the same psychologist must not overlap. The concrete
+  PostgreSQL mechanism is **PROPOSED** in `docs/DATABASE_DESIGN.md`.
+- Payment confirmation after hold expiry must never automatically confirm the expired booking. The
+  payment goes to manual review and may require a manual refund. The authoritative payment timestamp
+  remains unresolved pending team approval.
+- A client requesting cancellation at least 24 hours before the session is eligible for a
+  psychologist-handled manual refund. Cancellation and rescheduling are arranged directly with the
+  psychologist; exceptions and operating details are still open questions.
+- All timestamps are stored in UTC; each psychologist has a time zone in their profile.
+- Client data is sensitive: personal data is not logged and secrets are never committed.
 
 ## Getting Started
 
 ### Prerequisites
 
 - Git
+- Python 3.12 or newer
+- uv
 - Docker and Docker Compose
 
 ### Run Locally
 
+From the repository root:
+
 ```bash
-git clone <repository-url>
-cd Sessionly
-cp .env.example .env    # fill in the required values
-docker compose up --build
+cp .env.example .env
+# Keep the sample values for local development, or update the database credentials and URL together.
+docker compose up -d db
 ```
 
-- Frontend: http://localhost:3000
+In a second terminal, start the backend:
+
+```bash
+cd backend
+uv sync
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload
+```
+
+The local PostgreSQL service is available at `127.0.0.1:15432` and maps to port `5432` inside
+the container. `DATABASE_URL` in `.env` is for a backend process running on the host. If the
+backend runs as a Docker Compose service, configure it with
+`postgresql+psycopg://sessionly:sessionly_local@db:5432/sessionly`; `db` is the Compose service name.
+There are no application tables or migration revisions yet.
+
+- Backend health: http://localhost:8000/health
 - Backend API documentation: http://localhost:8000/docs
+- PostgreSQL: `localhost:15432`
+
+Stop PostgreSQL with `docker compose down`. To remove its persistent local data as well, run
+`docker compose down -v`.
 
 ## Deployment
 
-_To be completed once the deployment target is finalised._
+The production target is one AWS EC2 instance running Docker Compose, with Caddy for HTTPS and
+Terraform configuration under `infra/`.
+
+## Documentation Status
+
+`docs/PRODUCT_SPEC.md` separates approved product requirements from proposed technical decisions
+and unresolved questions. `docs/API_CONTRACT.md` and `docs/DATABASE_DESIGN.md` contain concrete
+implementation proposals; details marked **PROPOSED** are not approved requirements.
 
 ## Team
 
@@ -138,9 +174,12 @@ _To be completed once the deployment target is finalised._
 
 ## Roadmap
 
-Planned after the first version:
+Later MVP development milestones:
 
-- appointment rescheduling;
-- reminders for clients;
-- automatic refunds;
-- appointment statistics.
+- Google Calendar synchronisation;
+- AI scheduling assistant.
+
+Other lower-priority work:
+
+- appointment statistics;
+- design improvements.
