@@ -67,7 +67,7 @@ spreadsheets or separate calendar applications. This leads to:
 
 ```
 Sessionly/
-├── backend/             # FastAPI application, database models, migrations, tests
+├── backend/             # FastAPI application, production Dockerfile, models, migrations, tests
 ├── frontend/            # Next.js application
 ├── infra/               # Terraform deployment configuration
 ├── docs/                # Product, API and database design documents
@@ -141,7 +141,10 @@ uv run uvicorn app.main:app --reload
 ```
 
 The local PostgreSQL service is available at `127.0.0.1:15432` and maps to port `5432` inside
-the container. There are no application tables or migration revisions yet.
+the container. `DATABASE_URL` in `.env` is for a backend process running on the host. If the
+backend runs as a Docker Compose service, configure it with
+`postgresql+psycopg://sessionly:sessionly_local@db:5432/sessionly`; `db` is the Compose service name.
+There are no application tables or migration revisions yet.
 
 - Backend health: http://localhost:8000/health
 - Backend API documentation: http://localhost:8000/docs
@@ -152,9 +155,8 @@ Stop PostgreSQL with `docker compose down`. To remove its persistent local data 
 
 ## Deployment
 
-The current project deployment requirement is a single AWS EC2 instance running Docker Compose,
-with Caddy for HTTPS and Terraform configuration in `infra/`. The team should confirm that this
-remains the MVP target; this documentation update does not change it.
+The production target is one AWS EC2 instance running Docker Compose, with Caddy for HTTPS and
+Terraform configuration under `infra/`.
 
 ## Documentation Status
 

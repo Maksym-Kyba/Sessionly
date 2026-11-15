@@ -50,10 +50,9 @@ Clients book through a psychologist's booking page without creating Sessionly ac
 
 ### Deployment constraint already present in project instructions
 
-- The documented target is one AWS EC2 instance running Docker Compose, Caddy for HTTPS and
-  Terraform configuration in `infra/`.
-- This work preserves that target. The team should confirm that it remains the MVP deployment
-  target; no replacement architecture is proposed here.
+- The production target is one AWS EC2 instance running Docker Compose, Caddy for HTTPS and
+  Terraform configuration under `infra/`.
+- This review preserves that target and does not propose replacement infrastructure.
 
 ## Scope
 
@@ -66,7 +65,8 @@ Clients book through a psychologist's booking page without creating Sessionly ac
   active holds or confirmed appointments.
 - Development mock payment flow and safe handling of payments confirmed after hold expiry.
 - Psychologist appointment dashboard.
-- HTTPS deployment, subject to confirmation of the existing AWS deployment target.
+- HTTPS deployment to the documented AWS target: one EC2 instance, Docker Compose, Caddy and
+  Terraform under `infra/`.
 
 ### MVP scope: later development milestones
 
@@ -121,4 +121,3 @@ See `API_CONTRACT.md` and `DATABASE_DESIGN.md` for more concrete proposals.
 - Which payment timestamp is authoritative at the hold-expiration boundary (for example, provider
   confirmation time or the time Sessionly receives and verifies the event)? This remains unresolved
   until the team approves an exact policy.
-- Does the team confirm AWS EC2, Docker Compose, Caddy and Terraform as the MVP deployment target?

@@ -66,12 +66,14 @@ are open questions.
 - `id`, `psychologist_id`, optional `availability_rule_id`
 - `starts_at`, `ends_at` (`timestamptz`, stored in UTC)
 - `price_minor`, `currency`
-- `claim_state` (`available`, `held`, `booked`), nullable `held_until`, nullable
-  `claimed_by_booking_id`
+- proposed publication state (`published`, `withdrawn`); reservation/hold state is owned by the
+  `booking` module and is not stored here
 - `created_at`, `updated_at`
 
 Candidate uniqueness: `(psychologist_id, starts_at, ends_at)` to avoid duplicate generated slots.
-Exact recurrence representation and whether slots are materialized are unresolved technical choices.
+Slots are materialized for the next 30 days under the current preferred technical direction.
+Weekly rules use each psychologist's IANA timezone. DST gap and ambiguity policies must be explicit
+before implementation; the exact policy remains unresolved.
 
 ### `booking` module
 
@@ -80,6 +82,8 @@ Exact recurrence representation and whether slots are materialized are unresolve
 - `id`, `slot_id`, `psychologist_id`
 - `starts_at`, `ends_at` (`timestamptz`, copied from the selected slot for the appointment claim)
 - `client_email` (sensitive; redact from logs)
+- `access_token_hash` and nullable `access_token_expires_at` (**PROPOSED**; expiry policy
+  unresolved)
 - `status`
 - `created_at`, `updated_at`, `hold_expires_at`, `confirmed_at`, `completed_at`,
   `cancel_requested_at`
@@ -125,14 +129,15 @@ out-of-band cancellation. An expired booking remains `expired` after a late paym
 sets the payment to `manual_review` and can never confirm the booking. The exact authoritative
 payment timestamp is an unresolved policy question, not decided by this proposal.
 
-### Availability slot claim
+### Availability slot publication
 
-- `available` — no active hold or confirmed booking.
-- `held` — tied to one booking until `held_until`.
-- `booked` — reserved by a confirmed booking.
+- `published` — available-rule output eligible for public listing, subject to filtering through
+  `booking.api` for active holds and confirmed appointments.
+- `withdrawn` — no longer offered for new bookings after a rule is retired or changed.
 
-Slot-claim state is distinct from the booking lifecycle state. The API/ownership arrangement for
-changing it must respect the module boundary and be approved before implementation.
+Availability publication state is distinct from reservation and booking lifecycle state. Rule
+retirement may withdraw unbooked future slots, but must preserve slot records associated with active
+holds or confirmed bookings. It never deletes or changes a confirmed booking.
 
 ### Payment
 
@@ -157,12 +162,13 @@ confirmation after expiry are approved business requirements. The PostgreSQL mec
 1. Never read availability in Python and then create a hold in a separate operation.
 2. **PROPOSED:** set `hold_expires_at` from the database creation timestamp plus exactly 15 minutes.
    Use a database timestamp, not an application host clock.
-3. **PROPOSED atomic replacement transaction:** when processing a new reservation, transition all
-   relevant stale `held` bookings with `hold_expires_at <= clock_timestamp()` to `expired`, release
-   their slot claims through `availability.api`, then claim the requested slot and insert the new
-   `held` booking in the same transaction. If any step fails, roll back the expiry/release and new
-   claim together. This lazy expiry means no background timer is required to make an expired hold
-   reclaimable.
+3. **PROPOSED atomic replacement transaction:** resolve the requested published slot through
+   `availability.api`, transition relevant stale `held` bookings with
+   `hold_expires_at <= clock_timestamp()` to `expired`, then insert the new `held` booking in one
+   transaction. Booking owns all reservation state; changing a booking to `expired` removes its
+   interval from the active exclusion constraint. If slot validation, expiration or insertion fails,
+   roll back the transaction. This lazy expiry means no background timer is required to make an
+   expired hold reclaimable.
 4. **PROPOSED no-overlap constraint:** install PostgreSQL's trusted `btree_gist` extension and add
    a partial exclusion constraint on the booking table:
 
@@ -187,8 +193,9 @@ confirmation after expiry are approved business requirements. The PostgreSQL mec
    predicate `status = 'held'` to find expiration candidates. Do not use `now()` or
    `clock_timestamp()` in a partial-index predicate: expired rows leave the active exclusion set
    through an explicit status transition.
-6. On exclusion violation or failed conditional claim, roll back and return a conflict response.
-   Make client retries idempotent with a unique idempotency key or equivalent operation identity.
+6. On exclusion violation or an unavailable/withdrawn slot result, roll back and return a conflict
+   response. Make client retries idempotent with a unique idempotency key or equivalent operation
+   identity.
 7. Serialize payment confirmation and expiry by updating/locking the booking row in a transaction.
    Confirm only when status is still `held` and the approved payment-time comparison is before
    `hold_expires_at`. Otherwise keep the booking `expired` and mark the payment `manual_review`;
@@ -238,9 +245,9 @@ this document adds no test code.
 
 ## Open database decisions
 
+- Booking-access-token expiry, renewal and revocation policy.
 - Which payment timestamp is authoritative at the expiry boundary (provider confirmation time or
   Sessionly's verified receipt time)? This remains unresolved until the team approves the policy.
-- Whether availability slots are materialized and which module owns the atomic claim record.
 - How to keep one atomic transaction while respecting module-owned tables and public APIs.
 - Whether expired bookings are persisted or derived from `hold_expires_at`.
 - Whether manual cancellation/refund outcomes are recorded in the application and who can write them.

@@ -71,13 +71,37 @@ Consume request and response examples:
 The verification-token lifetime, email provider, resend limits and scanner-safe link flow are
 unresolved. Clients do not receive accounts or persistent sessions.
 
+## Public psychologist profile
+
+- `GET /api/v1/psychologists/{public_id}` — return the public booking-page profile.
+
+Response example (**PROPOSED**):
+
+```json
+{
+  "public_id": "psych_123",
+  "display_name": "Dr. Example",
+  "session_duration_minutes": 50,
+  "price_minor": 120000,
+  "currency": "UAH"
+}
+```
+
 ## Availability
 
-- `GET /api/v1/psychologists/{psychologist_id}/availability?from=...&to=...` — public list of
+- `GET /api/v1/psychologists/{public_id}/availability?from=...&to=...` — public list of
   bookable slots and display information.
-- `PUT /api/v1/accounts/me/availability-rules/{rule_id}` — psychologist manages an availability
-  rule (authenticated).
+- `GET /api/v1/accounts/me/availability-rules` — list the authenticated psychologist's rules.
 - `POST /api/v1/accounts/me/availability-rules` — psychologist creates an availability rule.
+- `PUT /api/v1/accounts/me/availability-rules/{rule_id}` — psychologist updates an availability
+  rule.
+- `DELETE /api/v1/accounts/me/availability-rules/{rule_id}` — retire a rule.
+
+All availability-rule routes require the authenticated psychologist. The delete operation is
+**PROPOSED** as a soft retirement: stop generating future slots and withdraw unbooked future slots,
+while preserving slot records associated with active holds or confirmed appointments. It must not
+cancel, delete or otherwise change confirmed bookings. The behavior for active holds is to preserve
+their slot records and let the booking module manage their lifecycle.
 
 Response example:
 
@@ -104,8 +128,8 @@ Whether slot duration, currency and price are represented this way is **PROPOSED
 
 - `POST /api/v1/bookings` — atomically expire applicable stale holds, claim a non-overlapping
   interval, and create a hold that expires exactly 15 minutes after database creation time.
-- `GET /api/v1/bookings/{booking_id}` — retrieve booking/payment progress using an unguessable
-  client access token or authenticated psychologist session.
+- `GET /api/v1/bookings/{booking_id}` — retrieve booking/payment progress using the client bearer
+  token returned by booking creation or an authenticated psychologist session.
 - `GET /api/v1/accounts/me/bookings` — list bookings for the authenticated psychologist.
 
 Create request:
@@ -126,7 +150,8 @@ Success response (assuming database creation time `2026-11-15T12:00:00Z`):
   "status": "held",
   "slot_id": "slot_456",
   "created_at": "2026-11-15T12:00:00Z",
-  "held_until": "2026-11-15T12:15:00Z",
+  "hold_expires_at": "2026-11-15T12:15:00Z",
+  "client_access_token": "opaque-high-entropy-token-returned-once",
   "payment": {
     "status": "pending",
     "mode": "mock",
@@ -135,10 +160,16 @@ Success response (assuming database creation time `2026-11-15T12:00:00Z`):
 }
 ```
 
+The `client_access_token` is a **PROPOSED** opaque, cryptographically random bearer token returned
+once over HTTPS. Store only a hash server-side and never log the token. The expiry and renewal policy
+for this token remain unresolved. The client sends it as
+`Authorization: Bearer <client_access_token>` when retrieving booking status. No client account is
+created.
+
 A competing request for the same slot or any overlapping time for the same psychologist receives
 `409 slot_unavailable`. Adjacent appointments where one ends exactly when the next starts are
 allowed under the **PROPOSED** half-open interval convention `[start, end)`. A successful response
-must not promise that a payment confirmed after `held_until` will confirm the booking.
+must not promise that a payment confirmed after `hold_expires_at` will confirm the booking.
 
 **PROPOSED concurrency contract:** simultaneous requests that overlap cannot both return a held
 booking. When a hold reaches its deadline, a new request must be able to expire it and create a
@@ -149,6 +180,19 @@ reservations indefinitely.
 
 - `POST /api/v1/bookings/{booking_id}/payments/mock` — **development only**, simulate a payment
   result without banking credentials. Proposed production behavior returns `404` or is absent.
+
+Request examples (**PROPOSED**):
+
+```json
+{"result": "success"}
+```
+
+```json
+{"result": "failure"}
+```
+
+The `result` field accepts only `success` or `failure`; this endpoint does not accept provider
+credentials or personal banking tokens.
 - `POST /api/v1/payments/webhooks/{provider}` — future provider callback endpoint; provider name,
   signature scheme and exact payload are unresolved.
 - `GET /api/v1/bookings/{booking_id}/payment-status` — return payment and review state.
@@ -231,5 +275,6 @@ These are test cases to implement later; this document adds no test code.
 - Currency/amount representation and availability-rule payloads.
 - Production payment provider, webhook authentication and payment/refund lifecycle.
 - Whether late-payment review is exposed to clients, psychologists, or both.
+- Booking access-token expiry, renewal and revocation policy.
 - Which payment timestamp is authoritative at hold expiry; this is explicitly unresolved pending
   team approval.
