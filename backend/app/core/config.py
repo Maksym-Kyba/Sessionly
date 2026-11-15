@@ -9,6 +9,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 class Settings(BaseSettings):
     database_url: str
+    test_database_url: str | None = None
     cors_allowed_origins: list[str] = ["http://localhost:3000"]
 
     model_config = SettingsConfigDict(

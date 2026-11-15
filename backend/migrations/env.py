@@ -5,6 +5,8 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import settings
 from app.core.database import Base
+from app.accounts import models as account_models  # noqa: F401
+from app.availability import models as availability_models  # noqa: F401
 
 # Import future model modules here so Alembic can discover their metadata.
 

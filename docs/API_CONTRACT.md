@@ -103,6 +103,38 @@ while preserving slot records associated with active holds or confirmed appointm
 cancel, delete or otherwise change confirmed bookings. The behavior for active holds is to preserve
 their slot records and let the booking module manage their lifecycle.
 
+**PROPOSED rule request body** (used by both `POST` and full-replacement `PUT`):
+
+```json
+{
+  "weekday": 0,
+  "local_start": "09:00:00",
+  "local_end": "12:00:00",
+  "session_duration_minutes": 50,
+  "price_minor": 120000,
+  "currency": "UAH",
+  "valid_from": "2026-11-16",
+  "valid_until": null
+}
+```
+
+`weekday` is **PROPOSED** as Monday `0` through Sunday `6`; rule times are local wall-clock times
+in the psychologist profile's IANA time zone. Rules generate materialized slots for the next 30
+local calendar days. Price is represented in integer minor units with an ISO 4217 currency code.
+**UAH is the only supported currency in this milestone.**
+Rule deletion retires the rule and withdraws its future unbooked slots; slot records remain in the
+database so later booking records are not removed or changed.
+
+**PROPOSED validation:** a session must fit entirely within its same-day rule interval. Active
+rules for the same weekday and intersecting date ranges cannot overlap in local time unless their
+weekly schedule, duration and price are identical. Identical rules are deduplicated during slot
+materialization; different overlapping rules or slots are rejected with `409`. Overnight rules are
+not supported by this proposal because their recurrence weekday/date semantics are unspecified.
+
+**PROPOSED operational detail:** the public availability `GET` refreshes the psychologist's
+materialized 30-day slot horizon before returning currently published slots. The refresh is
+idempotent and serialized with rule changes.
+
 Response example:
 
 ```json

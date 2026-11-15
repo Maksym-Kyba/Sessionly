@@ -59,6 +59,8 @@ are open questions.
 - `id`, `psychologist_id`
 - weekday/recurrence fields and local start/end times
 - `session_duration_minutes`, `price_minor`, `currency`
+- Currency is restricted to ISO code `UAH` for the initial implementation; enabling other
+  currencies requires a reviewed schema/API change.
 - `valid_from`, `valid_until`, `created_at`, `updated_at`
 
 **PROPOSED `availability_slots`**
@@ -74,6 +76,18 @@ Candidate uniqueness: `(psychologist_id, starts_at, ends_at)` to avoid duplicate
 Slots are materialized for the next 30 days under the current preferred technical direction.
 Weekly rules use each psychologist's IANA timezone. DST gap and ambiguity policies must be explicit
 before implementation; the exact policy remains unresolved.
+
+**PROPOSED implementation behavior for this milestone, pending team approval:** a local occurrence
+that falls in a DST gap is skipped; an ambiguous local time uses `fold=0` (the earlier UTC
+occurrence). Slot duration is elapsed minutes in UTC. These rules are covered by tests, but remain
+technical proposals until the team confirms the desired product behavior.
+If a rule's start or end boundary is nonexistent on a DST transition date, the implementation skips
+that entire rule occurrence for that date.
+
+The implementation refreshes the rolling horizon on rule create/update/retirement and before a
+public availability read. **PROPOSED:** refresh and rule changes lock the psychologist row so
+concurrent refreshes reconcile a single desired slot set. Retired or superseded slots are marked
+`withdrawn` and retained; slot rows are never deleted by availability operations.
 
 ### `booking` module
 
@@ -251,6 +265,7 @@ this document adds no test code.
 - How to keep one atomic transaction while respecting module-owned tables and public APIs.
 - Whether expired bookings are persisted or derived from `hold_expires_at`.
 - Whether manual cancellation/refund outcomes are recorded in the application and who can write them.
-- Currency scale/allowed currencies, price snapshot policy and session duration constraints.
+- Price snapshot policy and session duration limits beyond the current availability-window check.
+- Whether currencies beyond the initial `UAH` support should be enabled.
 - OAuth session/refresh-token storage and client verification retention.
 - Exact PostgreSQL constraints/indexes after API and workflow review.
