@@ -46,11 +46,13 @@ The prototype is demonstrated on 19 November 2026. Graded criteria:
 
 ### First Version Scope
 
-- **P0 (required):** psychologist Google OAuth sign-in; available hours with session length and
-  price; client email verification by one-time link; slot selection with a 15-minute hold; mock
-  payments for development and payment confirmation only when validly received before hold
-  expiry; psychologist dashboard; deployment to AWS over HTTPS.
-- **P1 (desired):** Google Calendar synchronisation and AI scheduling assistant.
+- **P0 (first MVP milestone):** psychologist Google OAuth sign-in; available hours with session
+  length and price; client email verification by one-time link; 15-minute slot hold with atomic
+  expiry/replacement and no overlapping active holds or confirmed appointments; development mock
+  payments and safe handling of payments confirmed after hold expiry; psychologist dashboard;
+  deployment to AWS over HTTPS.
+- **P1 (later MVP milestone):** Google Calendar synchronisation and AI scheduling assistant.
+  Both remain within the approved MVP scope and are not post-MVP features.
 - **P2 (if time permits):** statistics and design improvements.
 - **Out of scope for automated application flows:** cancellation and rescheduling (handled by
   direct contact), automatic refunds, client accounts. Manual refunds follow the approved
@@ -89,31 +91,37 @@ Modules: `accounts`, `availability`, `booking`, `payments`, `calendar`, `notific
 
 ## Business Rules
 
-1. **Atomic slot hold.** Claiming a slot must be atomic; never check availability in Python and
-   then write separately. A proposed implementation is a conditional database update or insert
-   with a unique slot constraint and a returned claim result.
-2. **Hold expiry.** A hold lasts 15 minutes. An expired hold cannot be used to confirm a later
-   payment automatically.
-3. **Booking statuses.** Booking status transitions happen only through the `booking` module.
-   Candidate statuses are documented as proposals in `docs/DATABASE_DESIGN.md`.
-4. **Payments.**
+1. **Hold deadline.** A hold expires exactly 15 minutes after its creation time.
+2. **Atomic expiry and replacement.** Expired holds must not block new reservations indefinitely.
+   Expiring stale holds and creating a replacement hold must be one concurrency-safe transaction;
+   never check availability in Python and then write separately.
+3. **No overlapping appointments.** A psychologist cannot have overlapping active holds or
+   confirmed appointments, including bookings created from distinct slot records. The PostgreSQL
+   range-exclusion mechanism in `docs/DATABASE_DESIGN.md` is **PROPOSED**, not an approved schema.
+4. **Booking statuses.** Booking status transitions happen only through the `booking` module.
+   Proposed transitions and names are documented in `docs/DATABASE_DESIGN.md`.
+5. **Payments.**
    - Payment events may be delivered more than once; handling must be idempotent.
    - A payment confirmed after hold expiry enters manual review and must never automatically
-     confirm the booking, even if the slot is currently free. A refund may be required and is
-     handled manually.
+     confirm the expired booking, even if the interval is currently free. A refund may be required
+     and is handled manually.
+   - The authoritative payment timestamp is unresolved until the team explicitly approves a policy.
    - The production provider is undecided. Development must support a mock flow without personal
      banking API tokens.
-5. **Cancellation and refunds.** Cancellation and rescheduling are arranged by direct contact
+6. **Cancellation and refunds.** Cancellation and rescheduling are arranged by direct contact
    with the psychologist. A client requesting cancellation at least 24 hours before the session
    is eligible for a manually handled refund. Exceptions and operational details remain open.
-6. **Time.** All timestamps are stored as `timestamptz` in UTC. Each psychologist has a time zone
+7. **Time.** All timestamps are stored as `timestamptz` in UTC. Each psychologist has a time zone
    in their profile. The frontend displays times in the user's local time zone.
-7. **Sensitive data.** Client data is sensitive. Never log names or email addresses, never commit
+8. **Sensitive data.** Client data is sensitive. Never log names or email addresses, never commit
    real data, and never commit `.env` files.
 
 ## Testing
 
-Booking and payment logic must be covered by automated tests when implemented.
+Booking and payment logic must be covered by automated tests when implemented. Include concurrent
+scenarios for simultaneous identical holds, partially overlapping appointments, valid adjacent
+appointments, expiry/replacement races, payment-versus-expiry races, and duplicate payment events.
+These are test expectations only; do not add tests unless implementation work is approved.
 
 ## Open Questions
 
@@ -122,4 +130,6 @@ Booking and payment logic must be covered by automated tests when implemented.
 - OAuth client configuration, callback URLs, account-linking policy, and session mechanism.
 - Cancellation-policy exceptions and manual refund operations.
 - Google Calendar synchronisation frequency.
+- Which payment timestamp is authoritative at the 15-minute expiry boundary. This remains
+  unresolved until the team explicitly approves the policy.
 - Confirm that AWS EC2, Terraform, and Caddy remain the team's deployment target for this MVP.

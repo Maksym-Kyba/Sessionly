@@ -22,8 +22,10 @@ Clients book through a psychologist's booking page without creating Sessionly ac
 ### Availability and booking
 
 - Psychologists publish available hours, session length and price.
-- A selected slot is held for 15 minutes while payment is completed.
-- Slot claiming must prevent double booking.
+- A booking hold expires exactly 15 minutes after it is created.
+- Expired holds must not block a new reservation indefinitely.
+- Hold expiration and creation of a replacement hold must be concurrency-safe and atomic.
+- The same psychologist must not have overlapping active holds or confirmed appointments.
 
 ### Payments
 
@@ -55,21 +57,26 @@ Clients book through a psychologist's booking page without creating Sessionly ac
 
 ## Scope
 
-### Required for the first version
+### MVP scope: first milestone
 
 - Psychologist Google OAuth sign-in and profile.
 - Availability, session duration and price.
 - One-time client email verification link.
-- Fifteen-minute booking hold and double-booking protection.
+- Fifteen-minute booking hold, atomic expiry/replacement, and protection against overlapping
+  active holds or confirmed appointments.
 - Development mock payment flow and safe handling of payments confirmed after hold expiry.
 - Psychologist appointment dashboard.
 - HTTPS deployment, subject to confirmation of the existing AWS deployment target.
 
-### Planned or conditional
+### MVP scope: later development milestones
 
-- Google Calendar synchronisation and AI scheduling assistant are listed as desired follow-up
-  features in the current project instructions.
-- Statistics and design improvements are lower priority.
+These are approved MVP features even if implemented after the first milestone:
+
+- Google Calendar synchronisation.
+- AI scheduling assistant.
+
+Statistics and design improvements remain lower priority as recorded in the existing project
+instructions.
 
 ### Not automated in the first version
 
@@ -84,8 +91,14 @@ These proposals are not product requirements and need technical review:
 - **PROPOSED:** model Google OAuth identity separately from psychologist profile data.
 - **PROPOSED:** deliver verification links with random, single-use, expiring tokens; store only a
   token hash and consume it once. Delivery provider and token lifetime remain undecided.
-- **PROPOSED:** treat a late successful payment as a review case; leave the booking unconfirmed,
-  prevent automatic reassignment of that payment, and record any manual outcome for auditability.
+- **PROPOSED:** store `hold_expires_at` as the database creation time plus 15 minutes; atomically
+  expire stale holds and create a replacement hold in one transaction.
+- **PROPOSED:** use a PostgreSQL GiST exclusion constraint over psychologist ID and a half-open
+  appointment time range for rows in active booking states. A `btree_gist` operator class can
+  combine psychologist equality with range overlap; details are in `DATABASE_DESIGN.md`.
+- **PROPOSED:** treat a late successful payment as a payment review case; leave the booking expired
+  and unconfirmed, prevent automatic reassignment of that payment, and record any manual outcome
+  for auditability.
 - **PROPOSED:** isolate payment-provider-specific behavior behind a payment gateway interface;
   use a local mock implementation during development.
 - **PROPOSED:** keep table ownership within the existing modular-monolith boundaries and expose
@@ -105,4 +118,7 @@ See `API_CONTRACT.md` and `DATABASE_DESIGN.md` for more concrete proposals.
   refunds?
 - What direct-contact information will be shown to clients?
 - How often should Google Calendar synchronisation run?
+- Which payment timestamp is authoritative at the hold-expiration boundary (for example, provider
+  confirmation time or the time Sessionly receives and verifies the event)? This remains unresolved
+  until the team approves an exact policy.
 - Does the team confirm AWS EC2, Docker Compose, Caddy and Terraform as the MVP deployment target?

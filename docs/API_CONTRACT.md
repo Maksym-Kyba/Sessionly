@@ -9,6 +9,11 @@ rules in `PRODUCT_SPEC.md` remain authoritative.
 Base path proposal: `/api/v1`. JSON is used unless a route redirects to an OAuth provider. Times
 are RFC 3339 timestamps in UTC. IDs are opaque strings in examples.
 
+The approved MVP scope includes Google Calendar synchronisation and the AI scheduling assistant;
+they may be implemented in later MVP milestones. This contract currently focuses on identity,
+booking and payment endpoints. Their detailed endpoints remain **PROPOSED** and are not specified
+here.
+
 ## Identity and verification
 
 ### Psychologist Google OAuth
@@ -97,7 +102,8 @@ Whether slot duration, currency and price are represented this way is **PROPOSED
 
 ## Booking
 
-- `POST /api/v1/bookings` — atomically claim an available slot and create a 15-minute hold.
+- `POST /api/v1/bookings` — atomically expire applicable stale holds, claim a non-overlapping
+  interval, and create a hold that expires exactly 15 minutes after database creation time.
 - `GET /api/v1/bookings/{booking_id}` — retrieve booking/payment progress using an unguessable
   client access token or authenticated psychologist session.
 - `GET /api/v1/accounts/me/bookings` — list bookings for the authenticated psychologist.
@@ -112,13 +118,14 @@ Create request:
 }
 ```
 
-Success response:
+Success response (assuming database creation time `2026-11-15T12:00:00Z`):
 
 ```json
 {
   "id": "book_789",
   "status": "held",
   "slot_id": "slot_456",
+  "created_at": "2026-11-15T12:00:00Z",
   "held_until": "2026-11-15T12:15:00Z",
   "payment": {
     "status": "pending",
@@ -128,8 +135,15 @@ Success response:
 }
 ```
 
-A competing claim should receive `409 slot_unavailable`. A successful response must not promise
-that a later payment will confirm after `held_until`.
+A competing request for the same slot or any overlapping time for the same psychologist receives
+`409 slot_unavailable`. Adjacent appointments where one ends exactly when the next starts are
+allowed under the **PROPOSED** half-open interval convention `[start, end)`. A successful response
+must not promise that a payment confirmed after `held_until` will confirm the booking.
+
+**PROPOSED concurrency contract:** simultaneous requests that overlap cannot both return a held
+booking. When a hold reaches its deadline, a new request must be able to expire it and create a
+replacement without an intermediate race in which both holds are active or the expired hold blocks
+reservations indefinitely.
 
 ## Payments
 
@@ -149,16 +163,21 @@ Mock success example:
 }
 ```
 
-Late payment response example:
+Late payment response example (**PROPOSED**):
 
 ```json
 {
   "booking_id": "book_789",
   "payment_status": "manual_review",
-  "booking_status": "manual_review",
+  "booking_status": "expired",
   "message": "Payment received after the booking hold expired. The booking is not confirmed."
 }
 ```
+
+The late event does not transition the booking from `expired` to `confirmed`; its payment remains
+subject to manual review and may require a refund. Which timestamp establishes that payment
+confirmation was before or after expiry remains unresolved pending team approval. Until then, this
+contract must not define a provider timestamp as authoritative.
 
 The late-payment result must never automatically confirm a booking, even if the slot appears free
 when the payment event is processed. Manual review may conclude that a refund is needed.
@@ -186,6 +205,24 @@ Candidate status codes: `400` invalid input, `401` missing/invalid psychologist 
 state transition, `429` rate limit, and `5xx` unexpected service failure. These mappings are
 **PROPOSED**.
 
+## Proposed concurrency test scenarios
+
+These are test cases to implement later; this document adds no test code.
+
+- Two simultaneous requests for the same slot: exactly one hold succeeds; the other receives
+  `409 slot_unavailable`.
+- Two simultaneous requests for different, partially overlapping intervals belonging to the same
+  psychologist: at most one active hold succeeds.
+- Two adjacent intervals for the same psychologist: both holds may succeed because `[start, end)`
+  ranges that only touch at an endpoint do not overlap.
+- A new request racing with an expired hold and no other overlapping active appointment: the
+  expired hold is atomically transitioned out of the active state and one replacement hold succeeds;
+  no stale active hold blocks it indefinitely.
+- A payment confirmation racing with expiry and a replacement hold: either timely confirmation wins
+  and the overlapping replacement conflicts, or expiry/replacement wins and a late payment remains
+  under review. The old booking and replacement cannot both become active, and a late payment never
+  confirms the expired booking.
+
 ## Open contract decisions
 
 - OAuth session mechanism, cookie policy, callback and account-linking behavior.
@@ -194,3 +231,5 @@ state transition, `429` rate limit, and `5xx` unexpected service failure. These 
 - Currency/amount representation and availability-rule payloads.
 - Production payment provider, webhook authentication and payment/refund lifecycle.
 - Whether late-payment review is exposed to clients, psychologists, or both.
+- Which payment timestamp is authoritative at hold expiry; this is explicitly unresolved pending
+  team approval.

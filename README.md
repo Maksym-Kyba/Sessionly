@@ -44,10 +44,10 @@ spreadsheets or separate calendar applications. This leads to:
   requests cancellation at least 24 hours before the scheduled session is eligible for a refund,
   handled manually by the psychologist.
 - **Dashboard:** psychologists see upcoming appointments and their statuses.
-- **Google Calendar integration (planned):** busy times can be hidden from clients and confirmed
-  appointments can be added to the calendar.
-- **AI scheduling assistant (planned):** suggests a time based on booking history and availability,
-  and drafts an invitation message for the psychologist to review.
+- **Google Calendar integration (MVP, later milestone):** busy times can be hidden from clients
+  and confirmed appointments can be added to the calendar.
+- **AI scheduling assistant (MVP, later milestone):** suggests a time based on booking history and
+  availability, and drafts an invitation message for the psychologist to review.
 
 ## Technology Stack
 
@@ -60,8 +60,8 @@ spreadsheets or separate calendar applications. This leads to:
 | Docker Compose | Local development environment |
 | Google OAuth | Psychologist sign-in |
 | Mock payments | Development payment flow; production provider TBD |
-| Google Calendar API | Planned calendar synchronisation |
-| OpenAI API | Planned AI scheduling suggestions and message drafts |
+| Google Calendar API | MVP calendar synchronisation (later milestone) |
+| OpenAI API | MVP AI scheduling suggestions and message drafts (later milestone) |
 
 ## Repository Structure
 
@@ -88,9 +88,9 @@ database, divided into modules with clear boundaries.
 | `availability` | Available hours, session length, price and published slots |
 | `booking` | Holds, booking statuses and appointment lifecycle |
 | `payments` | Payment attempts, mock development flow and future provider boundary |
-| `calendar` | Google Calendar synchronisation (planned) |
+| `calendar` | Google Calendar synchronisation (MVP, later milestone) |
 | `notifications` | One-time email verification links and booking notifications |
-| `assistant` | AI scheduling suggestions (planned) |
+| `assistant` | AI scheduling suggestions (MVP, later milestone) |
 
 Modules communicate only through each module's public interface (`api.py`) and never access
 another module's tables. Within a module, code is layered as router → service → repository.
@@ -99,9 +99,13 @@ Proposed endpoints and data structures are documented in `docs/API_CONTRACT.md` 
 
 ### Key Product Rules
 
-- A booking hold lasts 15 minutes and slot claims must prevent double booking atomically.
-- Payment confirmation after hold expiry must never automatically confirm the booking. It goes to
-  manual review and may require a manual refund.
+- A booking hold expires exactly 15 minutes after creation. Expired holds must not block
+  reservations indefinitely; expiration and a replacement hold must be concurrency-safe and atomic.
+- Holds and confirmed appointments for the same psychologist must not overlap. The concrete
+  PostgreSQL mechanism is **PROPOSED** in `docs/DATABASE_DESIGN.md`.
+- Payment confirmation after hold expiry must never automatically confirm the expired booking. The
+  payment goes to manual review and may require a manual refund. The authoritative payment timestamp
+  remains unresolved pending team approval.
 - A client requesting cancellation at least 24 hours before the session is eligible for a
   psychologist-handled manual refund. Cancellation and rescheduling are arranged directly with the
   psychologist; exceptions and operating details are still open questions.
@@ -168,8 +172,12 @@ implementation proposals; details marked **PROPOSED** are not approved requireme
 
 ## Roadmap
 
-Planned after the first version:
+Later MVP development milestones:
 
 - Google Calendar synchronisation;
-- AI scheduling assistant;
-- appointment statistics and design improvements.
+- AI scheduling assistant.
+
+Other lower-priority work:
+
+- appointment statistics;
+- design improvements.

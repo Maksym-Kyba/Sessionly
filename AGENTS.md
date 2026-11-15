@@ -15,11 +15,17 @@
 
 - Psychologists authenticate exclusively through Google OAuth.
 - Clients have no accounts and verify email through a one-time link.
-- A selected slot is held for 15 minutes; slot claiming must prevent double booking.
+- A hold expires exactly 15 minutes after creation. Expiry and replacement must be atomic and
+  concurrency-safe; expired holds must not block new reservations indefinitely.
+- Overlapping active holds and confirmed appointments for the same psychologist are prohibited.
+- Google Calendar integration and the AI scheduling assistant are both within the approved MVP
+  scope; they may be implemented in later MVP milestones.
 - Mock payments are available for development without personal banking API tokens. The production
   payment provider is not finalized.
-- A payment confirmed after hold expiry must never automatically confirm the booking. It requires
-  manual review and may require a refund.
+- A payment confirmed after hold expiry must never automatically confirm the expired booking. It
+  requires manual review and may require a refund.
+- The authoritative payment timestamp at the expiry boundary is unresolved until the team approves
+  an exact policy.
 - Cancellation and rescheduling are arranged through direct contact with the psychologist.
 - A cancellation request made at least 24 hours before the session is eligible for a refund,
   handled manually by the psychologist. Unspecified exceptions and operating details remain open.
@@ -34,7 +40,12 @@
   no business decisions.
 - Modules communicate with plain function calls; do not add queues or events without approval.
 - Booking lifecycle transitions belong to `booking`.
+- PostgreSQL overlap-prevention mechanisms and status transitions documented with **PROPOSED** are
+  technical proposals, not approved schema requirements.
 - Every schema change requires a new Alembic migration; never edit an existing migration.
+- When booking logic is implemented, test concurrent same-slot and overlapping-slot attempts,
+  adjacent intervals, expiry/replacement races, payment/expiry races, and duplicate payment events.
+  Do not add tests or migrations as part of documentation-only work.
 - Do not implement business logic, authentication, integrations or migrations until specifically
   requested and approved.
 

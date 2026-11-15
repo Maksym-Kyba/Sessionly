@@ -77,11 +77,12 @@ Exact recurrence representation and whether slots are materialized are unresolve
 
 **PROPOSED `bookings`**
 
-- `id`, `slot_id`
+- `id`, `slot_id`, `psychologist_id`
+- `starts_at`, `ends_at` (`timestamptz`, copied from the selected slot for the appointment claim)
 - `client_email` (sensitive; redact from logs)
 - `status`
-- `held_until`, `confirmed_at`, `completed_at`, `cancel_requested_at`
-- `created_at`, `updated_at`
+- `created_at`, `updated_at`, `hold_expires_at`, `confirmed_at`, `completed_at`,
+  `cancel_requested_at`
 
 The booking stores a price/currency snapshot or references an immutable slot price; this choice
 needs review. Cancellation/rescheduling is handled out of band, so `cancel_requested_at` is only a
@@ -109,13 +110,20 @@ All names and exact transitions in this section are **PROPOSED**.
 
 ### Booking
 
-- `held` — slot claimed, payment window active.
-- `confirmed` — payment was validly confirmed before hold expiry.
-- `completed` — session took place.
-- `expired` — hold elapsed without a timely successful payment.
+- `held` — created with `hold_expires_at = created_at + 15 minutes`; the appointment interval is
+  reserved until payment succeeds in time or the hold expires.
+- `confirmed` — payment confirmation was accepted before `hold_expires_at`.
+- `expired` — the deadline passed without timely accepted payment. This state releases the interval
+  for a new reservation.
+- `completed` — the session took place.
 - `cancelled` — a psychologist handled cancellation out of band and recorded the result, if the team
   chooses to persist that status.
-- `manual_review` — payment arrived after expiry; booking is not confirmed pending human review.
+
+**PROPOSED transitions:** `held -> confirmed` only for a timely payment; `held -> expired` at the
+15-minute deadline; `confirmed -> completed`; and optionally `confirmed -> cancelled` after an
+out-of-band cancellation. An expired booking remains `expired` after a late payment event; that event
+sets the payment to `manual_review` and can never confirm the booking. The exact authoritative
+payment timestamp is an unresolved policy question, not decided by this proposal.
 
 ### Availability slot claim
 
@@ -129,56 +137,109 @@ changing it must respect the module boundary and be approved before implementati
 ### Payment
 
 - `pending` — created, awaiting result.
-- `succeeded` — timely success recorded.
+- `succeeded` — timely success recorded and accepted by the booking module.
 - `failed` — provider/mock reports failure.
-- `manual_review` — success arrived after the hold expired; never confirms the booking.
+- `manual_review` — payment confirmation is late or its timing requires review; booking remains
+  unconfirmed and, if expired, stays `expired`.
 - `refund_pending` — a manual refund has been decided and is being processed out of band.
 - `refunded` — manual refund completion recorded.
 
-A direct `succeeded` → `confirmed` action is allowed only for a timely payment through the booking
-module. A late event may be financially successful while payment outcome is `manual_review`.
+Only the booking module may transition `held` to `confirmed`, and only after its atomic deadline
+check accepts the payment as timely. The authority and precedence of provider timestamps versus
+Sessionly's verified receipt time are unresolved and require team approval.
 
 ## Double-booking and expiry safeguards
 
-These safeguards are **PROPOSED** implementation constraints to satisfy the approved no-double-booking
-and 15-minute-hold requirements:
+The 15-minute expiry, atomic replacement requirement, no-overlap rule and prohibition on automatic
+confirmation after expiry are approved business requirements. The PostgreSQL mechanisms below are
+**PROPOSED** technical decisions.
 
-1. Never read a slot as free in Python and then write a hold in a separate operation.
-2. Make the claim atomic in PostgreSQL. **PROPOSED transaction:** create a held booking, then call
-   `availability.api.claim_slot(...)`, which performs a conditional `UPDATE` of its slot row where
-   `claim_state = 'available'` or `claim_state = 'held' AND held_until <= now()`. Set the new
-   `claim_state`, `held_until` and booking reference and return the claimed ID. Roll back the
-   booking insert if the update returns no row. A database unique constraint on the slot's active
-   booking reference is a second guard.
-3. Add the partial unique booking index for active claims described above. Return conflict if the
-   atomic slot update affects no row. Expired and cancelled history must not permanently block
-   another booking attempt for the same published slot.
-4. Use database time for hold expiry and store all instants as `timestamptz` UTC.
-5. Make retries idempotent with a client idempotency key or equivalent unique operation identity.
-6. Record provider events with a unique event identity to prevent duplicate webhook processing.
-7. Process a payment event against the hold expiry and booking state in a transaction. If payment
-   confirmation is after expiry, persist `manual_review`; do not run the normal confirmation path,
-   even if the slot is currently available. Manual review may result in a refund.
-8. Slot-claim updates must go through `availability.api`; no direct cross-module table access.
-   The booking service owns booking lifecycle transitions. Sharing the transaction/session across
-   these module APIs is a **PROPOSED** implementation detail that must be reviewed before coding.
+1. Never read availability in Python and then create a hold in a separate operation.
+2. **PROPOSED:** set `hold_expires_at` from the database creation timestamp plus exactly 15 minutes.
+   Use a database timestamp, not an application host clock.
+3. **PROPOSED atomic replacement transaction:** when processing a new reservation, transition all
+   relevant stale `held` bookings with `hold_expires_at <= clock_timestamp()` to `expired`, release
+   their slot claims through `availability.api`, then claim the requested slot and insert the new
+   `held` booking in the same transaction. If any step fails, roll back the expiry/release and new
+   claim together. This lazy expiry means no background timer is required to make an expired hold
+   reclaimable.
+4. **PROPOSED no-overlap constraint:** install PostgreSQL's trusted `btree_gist` extension and add
+   a partial exclusion constraint on the booking table:
+
+   ```sql
+   CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+   ALTER TABLE bookings
+     ADD CONSTRAINT no_overlapping_active_appointments
+     EXCLUDE USING gist (
+       psychologist_id WITH =,
+       tstzrange(starts_at, ends_at, '[)') WITH &&
+     ) WHERE (status IN ('held', 'confirmed'));
+   ```
+
+   The half-open range allows back-to-back appointments. The exclusion constraint rejects overlaps
+   across distinct slot rows as well as exact duplicates, including concurrent inserts. PostgreSQL
+   range exclusion constraints support non-overlap, and `btree_gist` supplies GiST equality support
+   for UUID psychologist IDs. The constraint creates its GiST index. The exact table owner and
+   transaction/session arrangement must preserve module boundaries.
+5. A separate unique slot identity constraint may prevent duplicate generated slots, but it is not
+   a substitute for the range exclusion constraint. Add a B-tree index on `(hold_expires_at)` with
+   predicate `status = 'held'` to find expiration candidates. Do not use `now()` or
+   `clock_timestamp()` in a partial-index predicate: expired rows leave the active exclusion set
+   through an explicit status transition.
+6. On exclusion violation or failed conditional claim, roll back and return a conflict response.
+   Make client retries idempotent with a unique idempotency key or equivalent operation identity.
+7. Serialize payment confirmation and expiry by updating/locking the booking row in a transaction.
+   Confirm only when status is still `held` and the approved payment-time comparison is before
+   `hold_expires_at`. Otherwise keep the booking `expired` and mark the payment `manual_review`;
+   never auto-confirm it even if the interval is free. The timestamp used for that comparison is
+   unresolved pending explicit team approval.
+8. Slot-claim changes go through `availability.api`; booking lifecycle transitions go through
+   `booking`. Any shared transaction/session mechanism across those APIs is **PROPOSED** and must
+   preserve table ownership boundaries.
 
 ## Index and integrity proposals
 
 - Unique `google_subject`.
-- Unique slot identity per psychologist and start/end interval.
-- **PROPOSED:** partial unique index on `bookings.slot_id` for statuses that actively own a
-  slot (`held` and `confirmed`). This permits a new booking attempt after expiry/cancellation while
-  preventing two active bookings from owning the same slot. `manual_review` does not acquire the
-  slot automatically; a late payment must not displace a newer valid hold or booking.
+- Unique slot identity per psychologist and start/end interval, to prevent duplicate generated
+  slot records only.
+- **PROPOSED:** partial GiST exclusion constraint for active (`held`, `confirmed`) appointment
+  ranges, as shown above; it prevents overlapping intervals per psychologist, not just identical
+  timestamps.
+- **PROPOSED:** B-tree index on `hold_expires_at` with `WHERE status = 'held'` for expiry lookup.
+  The status transition removes an expired hold from the exclusion constraint; time-dependent
+  predicates are not used in indexes.
+- A late-payment booking in `expired` does not reclaim or block the interval automatically.
 - Unique verification-token hash.
 - Unique provider event identity where supplied.
 - Index availability by `(psychologist_id, starts_at)` and bookings by `(psychologist_id, status,
-  held_until)` through a deliberate ownership/reference design.
+  hold_expires_at)` through a deliberate ownership/reference design.
 - Foreign keys should use explicit delete behavior; cascade policy is not yet decided.
+
+## Proposed concurrency test scenarios
+
+These scenarios should be covered by automated tests when the booking implementation is approved;
+this document adds no test code.
+
+1. Two simultaneous holds for the same slot: exactly one succeeds; the other receives a conflict.
+2. Two simultaneous holds for different partially overlapping slot intervals for one psychologist:
+   at most one remains active, enforced by the exclusion constraint.
+3. Two adjacent intervals where the first ends exactly when the second starts: both may be held or
+   confirmed because the proposed range is `[start, end)`.
+4. A new hold request at/after the 15-minute deadline while the old hold is still marked `held`
+   and no other active appointment overlaps: one transaction expires/releases the old hold and
+   creates the new one; no stale hold blocks it.
+5. Two competing requests attempting to replace an expired hold: only one new active overlapping
+   hold succeeds.
+6. Payment confirmation racing with expiry and a new overlapping reservation: no two active
+   appointments coexist; if the payment is late under the approved timestamp policy, the old booking
+   remains expired and is never automatically confirmed.
+7. Repeat a payment event: idempotency prevents duplicate state changes or a second confirmation.
 
 ## Open database decisions
 
+- Which payment timestamp is authoritative at the expiry boundary (provider confirmation time or
+  Sessionly's verified receipt time)? This remains unresolved until the team approves the policy.
 - Whether availability slots are materialized and which module owns the atomic claim record.
 - How to keep one atomic transaction while respecting module-owned tables and public APIs.
 - Whether expired bookings are persisted or derived from `held_until`.
