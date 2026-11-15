@@ -242,7 +242,7 @@ this document adds no test code.
   Sessionly's verified receipt time)? This remains unresolved until the team approves the policy.
 - Whether availability slots are materialized and which module owns the atomic claim record.
 - How to keep one atomic transaction while respecting module-owned tables and public APIs.
-- Whether expired bookings are persisted or derived from `held_until`.
+- Whether expired bookings are persisted or derived from `hold_expires_at`.
 - Whether manual cancellation/refund outcomes are recorded in the application and who can write them.
 - Currency scale/allowed currencies, price snapshot policy and session duration constraints.
 - OAuth session/refresh-token storage and client verification retention.
