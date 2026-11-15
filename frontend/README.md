@@ -44,7 +44,20 @@ Next.js reads environment variables from `frontend/.env.local`, which is not com
 
 ```
 frontend/
-├── public/     # Static assets
+├── public/              # Static assets
 └── src/
-    └── app/    # Routes, layouts and global styles (Next.js App Router)
+    ├── app/             # Routes, layouts and global styles (Next.js App Router)
+    ├── components/ui/   # Shared UI components: Button, Badge, Card, TextField, Logo
+    └── utils/           # Small framework-independent helpers
 ```
+
+## Design System
+
+Design tokens are defined in `src/app/globals.css` with the Tailwind CSS `@theme` directive:
+
+- **Colours:** soft mint (`mint-50` to `mint-300`) and white, with charcoal (`ink`) for text and
+  primary actions. Google sign-in and sign-up buttons use `mint-300`.
+- **Fonts:** Pangolin for headings (`font-display`) and Nunito for body text (`font-sans`), both
+  loaded through `next/font` with Cyrillic support.
+
+The `/styleguide` page shows every token and shared component in one place.
