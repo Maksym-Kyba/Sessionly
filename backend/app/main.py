@@ -3,10 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.availability.router import router as availability_router
 from app.core.config import settings
 from app.core.database import engine
 
 app = FastAPI(title="Sessionly API")
+app.include_router(availability_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allowed_origins,

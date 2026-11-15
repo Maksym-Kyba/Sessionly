@@ -140,6 +140,18 @@ uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
 ```
 
+Run the Backend tests with an isolated temporary PostgreSQL database:
+
+```bash
+cd backend
+uv sync --group dev
+uv run --group dev pytest
+```
+
+The test database fixture creates and drops a uniquely named database using the configured
+`TEST_DATABASE_URL` credentials. The PostgreSQL role therefore needs permission to create
+databases. The test fixture never connects to or modifies the configured application database.
+
 The local PostgreSQL service is available at `127.0.0.1:15432` and maps to port `5432` inside
 the container. `DATABASE_URL` in `.env` is for a backend process running on the host. If the
 backend runs as a Docker Compose service, configure it with
