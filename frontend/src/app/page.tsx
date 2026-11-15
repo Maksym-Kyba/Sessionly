@@ -1,12 +1,22 @@
-import { Logo } from "@/components/ui/Logo";
+import { CallToAction } from "@/components/landing/CallToAction";
+import { Hero } from "@/components/landing/Hero";
+import { HowItWorksSection } from "@/components/landing/HowItWorksSection";
+import { ProblemSection } from "@/components/landing/ProblemSection";
+import { SiteFooter } from "@/components/landing/SiteFooter";
+import { SiteHeader } from "@/components/landing/SiteHeader";
 
-/** Temporary home page; it is replaced by the landing page in a follow-up change. */
+/** Public landing page for psychologists. */
 export default function HomePage() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-mint-50 px-4 text-center">
-      <Logo />
-      <h1 className="text-4xl sm:text-5xl">Записи, оплати та розклад — в одному місці</h1>
-      <p className="max-w-xl text-muted">Сайт для незалежних психологів і їхніх клієнтів. Скоро тут буде більше.</p>
-    </main>
+    <>
+      <SiteHeader />
+      <main>
+        <Hero />
+        <ProblemSection />
+        <HowItWorksSection />
+        <CallToAction />
+      </main>
+      <SiteFooter />
+    </>
   );
 }
