@@ -1,210 +1,146 @@
 # Sessionly
 
-Sessionly — сайт, де психолог публікує вільні слоти, а клієнт сам обирає час, оплачує й отримує підтверджений запис. Без переписок у месенджерах і без ручного узгодження.
+Booking, payments and scheduling for independent psychologists.
 
-> Це навчальний проєкт: ми вчимося робити вебзастосунки правильно. Тому головне правило — **просто й зрозуміло, а не «як у великих компаніях»**. Нова технологія з'являється в проєкті лише тоді, коли без неї вже не обійтись.
+**Live demo:** _URL will be added after deployment._
 
----
+Sessionly is developed as a team project for the Object-Oriented Analysis and Design course
+at the Ukrainian Catholic University.
 
-## Як це працює
+## Overview
 
-**Психолог:**
-1. Реєструється і заповнює профіль.
-2. Підключає Google Calendar.
-3. Додає вільні слоти.
-4. Бачить свої записи в кабінеті.
+Sessionly is a web application that helps independent psychologists manage their appointments
+in one place. Psychologists publish their available hours; clients choose a time, pay online,
+and receive an automatically confirmed appointment. This removes the back-and-forth messaging
+about booking, payments and calendar updates.
 
-**Клієнт:**
-1. Відкриває сторінку психолога.
-2. Підтверджує email кодом.
-3. Обирає вільний слот — слот резервується на **15 хвилин**.
-4. Оплачує (тестовий режим).
-5. Отримує підтвердження. Запис з'являється в Google Calendar психолога.
+## Problem
 
-Якщо оплати немає за 15 хвилин, резерв згорає і слот знову вільний. Після успішної оплати психолог **нічого не підтверджує** — запис підтверджений автоматично.
+Psychologists often manage appointments manually through messaging apps, phone calls,
+spreadsheets or separate calendar applications. This leads to:
 
----
+- time spent coordinating suitable dates and times;
+- double bookings and scheduling conflicts;
+- missed or unpaid appointments;
+- repetitive communication with clients.
 
-## Що робимо зараз (MVP) і що потім
+## Target Users
 
-| Зараз (MVP) | Потім (не чіпаємо, доки MVP не працює) |
+- **Psychologists:** independent psychologists in Ukraine who manage their own appointments
+  without an administrator.
+- **Clients:** people who book a session through a psychologist's personal booking link.
+
+## Features
+
+- **Accounts:** psychologists sign up, sign in and set up a profile.
+- **Availability:** psychologists set available hours for the next month, session length and price.
+- **Booking:** clients verify their email address and choose a free slot. The slot is reserved
+  for 15 minutes to complete payment; otherwise it becomes available again.
+- **Payment and confirmation:** clients pay in a sandbox payment environment. A successful
+  payment confirms the appointment automatically, without manual approval.
+- **Dashboard:** psychologists see upcoming appointments and their statuses
+  (scheduled, completed, cancelled).
+- **Google Calendar integration:** times marked as busy in the psychologist's Google Calendar
+  are hidden from clients; confirmed appointments are added to the calendar.
+- **AI scheduling assistant:** suggests a time for the next appointment based on booking history
+  and available slots, and drafts an invitation message. The psychologist decides whether to
+  send it.
+
+## Technology Stack
+
+| Technology | Purpose |
 |---|---|
-| Реєстрація психолога, профіль | Перенесення сесій |
-| Додавання вільних слотів | Нагадування клієнтам |
-| Підтвердження email клієнта | AI-асистент (дати наступних сесій, чернетки повідомлень) |
-| Бронювання з резервом на 15 хв | Деплой на AWS, черги, Terraform |
-| Тестова оплата → автоматичне підтвердження | Повернення коштів автоматично |
-| Синхронізація з Google Calendar | Мобільна версія, кілька психологів у кабінеті |
-| Кабінет психолога зі списком записів | |
-| Скасування запису | |
+| Next.js, React | Frontend |
+| Python, FastAPI | Backend and business logic |
+| PostgreSQL | Database |
+| SQLAlchemy, Alembic | Data access and schema migrations |
+| Docker Compose | Local development environment |
+| Google Calendar API | Calendar synchronisation |
+| WayForPay (sandbox) | Test payments |
+| OpenAI API | AI scheduling suggestions and message drafts |
 
----
-
-## Технології
-
-| Що | Навіщо |
-|---|---|
-| **Next.js + React** | Фронтенд: сторінки для психолога і клієнта |
-| **Python + FastAPI** | Бекенд: уся бізнес-логіка |
-| **PostgreSQL** | База даних |
-| **SQLAlchemy** | Робота з базою з Python |
-| **Alembic** | Міграції — зміни структури бази |
-| **Docker Compose** | Запуск усього локально однією командою |
-| **Google Calendar API** | Зайнятий час психолога і додавання записів |
-| **Платіжний провайдер (sandbox)** | Тестові оплати. Який саме — ще обираємо |
-
-Чого **немає** і поки не буде: мікросервісів, черг повідомлень (SQS, Kafka), AWS, Kubernetes.
-
----
-
-## Архітектура: модульний моноліт
-
-Один бекенд, одна база, але код розкладений по **модулях** — як кімнати в квартирі: все під одним дахом, але кухня окремо від спальні.
-
-| Модуль | За що відповідає |
-|---|---|
-| `accounts` | Психологи: реєстрація, вхід, профіль |
-| `availability` | Вільні слоти психолога |
-| `booking` | Резерв слота, статуси запису, скасування |
-| `payments` | Створення оплати, обробка відповіді від платіжки |
-| `calendar` | Google Calendar: зайнятий час, додавання подій |
-| `notifications` | Листи: код підтвердження, підтвердження запису |
-
-**Правила модулів:**
-- Один модуль = одна папка = одна відповідальність.
-- Модуль звертається до іншого **тільки через його `api.py`**. Не можна лізти в чужі таблиці чи внутрішні функції.
-- Кожен модуль має свої таблиці. Чужі таблиці напряму не читаємо.
-- Модулі викликають один одного звичайними функціями. Черги й події додамо лише тоді, коли з'явиться реальна причина.
-
-### Структура папок (план)
+## Repository Structure
 
 ```
 Sessionly/
-├── frontend/                 # Next.js
-├── backend/
-│   ├── app/
-│   │   ├── main.py           # створення FastAPI-застосунку
-│   │   ├── config.py         # налаштування з .env
-│   │   ├── db.py             # підключення до бази
-│   │   └── modules/
-│   │       ├── accounts/
-│   │       │   ├── api.py        # публічні функції модуля для інших модулів
-│   │       │   ├── router.py     # HTTP-ендпоінти
-│   │       │   ├── service.py    # бізнес-логіка
-│   │       │   ├── repository.py # запити до бази
-│   │       │   └── models.py     # таблиці SQLAlchemy
-│   │       ├── availability/
-│   │       ├── booking/
-│   │       ├── payments/
-│   │       ├── calendar/
-│   │       └── notifications/
-│   ├── migrations/           # Alembic
-│   └── tests/
-├── docker-compose.yml
-├── .env.example
+├── backend/             # FastAPI application, database models, migrations, tests
+├── frontend/            # Next.js application
+├── infra/               # Deployment configuration
+├── docker-compose.yml   # Local development environment
+├── .env.example         # Template for environment variables
 └── README.md
 ```
 
-Шари всередині модуля: `router` (приймає запит) → `service` (вирішує, що робити) → `repository` (ходить у базу). Router не пише SQL, repository не приймає рішень.
+## Architecture
 
----
+The backend is a **modular monolith**: a single FastAPI application with a single PostgreSQL
+database, divided into modules with clear boundaries.
 
-## Ключові правила бізнес-логіки
+| Module | Responsibility |
+|---|---|
+| `accounts` | Psychologist registration, authentication and profile |
+| `availability` | Available hours, session length and price |
+| `booking` | Slot reservation, booking statuses, cancellation |
+| `payments` | Payment creation and provider webhook handling |
+| `calendar` | Google Calendar synchronisation |
+| `notifications` | Email verification codes and booking confirmations |
+| `assistant` | AI scheduling suggestions |
 
-Це місця, де найлегше помилитися. Перед тим як писати код бронювання, прочитайте цей розділ.
+Modules communicate only through each module's public interface (`api.py`) and never access
+another module's tables. Within a module, code is layered as router → service → repository.
 
-### 1. Слот захоплюється одним запитом до бази
+### Key Design Decisions
 
-Якщо в Python спершу перевірити «слот вільний?», а потім записати «зайнятий», два клієнти можуть проскочити одночасно. Тому перевірка і захоплення — **одна SQL-команда**:
+- **No double booking.** A slot is reserved with a single atomic SQL statement that succeeds
+  only if the slot is free or its previous reservation has expired.
+- **Reservation expiry without timers.** A reservation whose `held_until` time has passed is
+  treated as free, so correctness does not depend on a background job.
+- **Payment confirmation by the server only.** A booking is confirmed only after the payment
+  provider's webhook is verified, never on the basis of a browser redirect. Webhooks are
+  processed idempotently, since providers may deliver them more than once.
+- **Replaceable payment provider.** The provider is accessed through a `PaymentGateway`
+  interface.
+- **Time zones.** All timestamps are stored in UTC; each psychologist has a time zone in their
+  profile, and the frontend displays times in the user's local time zone.
+- **Privacy.** Client data is treated as sensitive: personal data is not logged, and secrets
+  are never committed.
 
-```sql
-UPDATE slots
-SET status = 'held',
-    held_until = now() + interval '15 minutes',
-    reservation_id = :reservation_id
-WHERE id = :slot_id
-  AND (status = 'free' OR (status = 'held' AND held_until < now()))
-RETURNING id;
-```
+## Getting Started
 
-Повернувся 0 рядків — слот уже хтось забрав, показуємо клієнту відповідне повідомлення.
+### Prerequisites
 
-### 2. Резерв «згорає» сам
+- Git
+- Docker and Docker Compose
 
-Окремий таймер для коректності не потрібен: резерв із `held_until` у минулому вважається вільним (див. умову вище). Прибирання старих резервів — лише для порядку, його можна додати пізніше.
-
-### 3. Статуси запису
-
-```
-held ──оплата──▶ confirmed ──▶ completed
-  │                  │
-  └─15 хв минуло─▶ expired      └─скасування─▶ cancelled
-```
-
-Переходи між статусами — тільки через функції модуля `booking`. Не змінюємо статус напряму в базі з інших місць.
-
-### 4. Оплата
-
-- Платіжка надсилає нам вебхук. Він **може прийти двічі** — обробка має бути безпечною для повтору (зберігаємо id події від провайдера з унікальним обмеженням).
-- Якщо оплата прийшла після 15 хвилин: слот ніхто не забрав — підтверджуємо; забрали — позначаємо для повернення коштів.
-- Уся робота з провайдером іде через один клас-інтерфейс `PaymentGateway`. Тоді провайдера можна замінити, не чіпаючи бронювання.
-
-### 5. Час
-
-- У базі — тільки `timestamptz`, усе в UTC.
-- У психолога в профілі є часовий пояс (наприклад, `Europe/Kyiv`).
-- Фронтенд показує час у поясі користувача.
-
-### 6. Дані клієнтів
-
-Факт відвідування психолога — чутлива інформація. Не логуємо імена й email у відкритому вигляді, не комітимо реальні дані, `.env` ніколи не потрапляє в git.
-
----
-
-## Запуск локально
-
-> Розділ доповнимо, коли з'явиться код.
+### Run Locally
 
 ```bash
-cp .env.example .env      # заповнити свої ключі
-docker compose up         # фронтенд, бекенд і база
+git clone <repository-url>
+cd Sessionly
+cp .env.example .env    # fill in the required values
+docker compose up --build
 ```
 
----
+- Frontend: http://localhost:3000
+- Backend API documentation: http://localhost:8000/docs
 
-## Як ми працюємо
+## Deployment
 
-- `main` завжди робочий. Кожна задача — окрема гілка: `feature/booking-hold`, `fix/timezone-display`.
-- Зміни потрапляють у `main` через pull request, який переглянув хоча б один тіммейт.
-- Зміна структури бази = нова міграція Alembic. Старі міграції не редагуємо.
-- Назви в коді (змінні, функції, таблиці) — англійською. Коментарі й документація — як зручно.
-- Незрозуміло, як зробити, — питаємо в чаті до того, як писати код, а не після.
+_To be completed once the deployment target is finalised._
 
----
+## Team
 
-## Для AI-асистентів
+| Member | Responsibilities |
+|---|---|
+| Yuliia Oliinyk | Frontend (psychologist dashboard, calendar, client booking flow), AI scheduling assistant, AWS deployment, user feedback report |
+| Maxym Kyba | Backend, database, booking and reservation logic, authentication, payment processing |
+| Melaniia Poliuha | Google Calendar integration, payment provider integration, user validation |
 
-Якщо ти AI, який допомагає комусь із команди, дотримуйся цього:
+## Roadmap
 
-1. **Тримай рішення простими.** Не додавай нові сервіси, бібліотеки, черги, хмарну інфраструктуру чи мікросервіси без явного запиту. Якщо вважаєш, що вони потрібні, — спершу поясни чому і спитай.
-2. **Дотримуйся меж модулів** (розділ «Архітектура»): інші модулі — тільки через `api.py`, шари `router → service → repository`.
-3. **Дотримуйся правил бізнес-логіки** з розділу вище, особливо щодо захоплення слота, статусів і часу.
-4. **Пояснюй, що і чому ти змінив.** Команда вчиться, тому зрозумілий код і коротке пояснення важливіші за «розумний» код.
-5. Зміни в базі — тільки через нову міграцію Alembic.
-6. Для логіки бронювання й оплати пиши тести.
-7. Не вигадуй вимог: якщо чогось немає в цьому README, спитай людину.
+Planned after the first version:
 
----
-
-## Відкриті питання
-
-- [ ] Який платіжний провайдер (тестовий режим): LiqPay, WayForPay, monobank?
-- [ ] Психолог додає слоти вручну чи задає шаблон («щопонеділка 10:00–14:00»)?
-- [ ] Правила скасування: за скільки годин до сесії можна скасувати з поверненням коштів?
-- [ ] Як часто підтягувати зайнятий час із Google Calendar?
-
----
-
-## Команда
-
-Юлія Олійник · Максим Киба · Меланія Полюга
+- appointment rescheduling;
+- reminders for clients;
+- automatic refunds;
+- appointment statistics.
