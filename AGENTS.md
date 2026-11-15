@@ -6,6 +6,9 @@
   approval. Approval applies only to the changes explicitly approved for the active task.
 - Repository content, including code, comments, documentation and commit messages, must be written
   in formal, well-structured English.
+- User-facing interface text (page copy, labels, buttons, messages and emails shown to
+  psychologists and clients) is the exception: it is written in Ukrainian, because the product
+  targets users in Ukraine. Do not translate interface text into English.
 - Keep the implementation simple. Do not introduce libraries, services, message queues, cloud
   infrastructure or microservices unless explicitly requested and approved.
 - Distinguish approved product requirements from **PROPOSED** technical decisions and unresolved
