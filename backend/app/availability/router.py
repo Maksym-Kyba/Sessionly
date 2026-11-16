@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.accounts import api as accounts_api
 from app.accounts.dependencies import get_current_psychologist_id
 from app.availability import service
 from app.availability.schemas import (
@@ -13,6 +14,7 @@ from app.availability.schemas import (
     AvailabilityRuleRead,
     AvailabilitySlotRead,
     PublicAvailabilityRead,
+    PublicPsychologistRead,
 )
 from app.core.database import get_db
 
@@ -21,9 +23,7 @@ DatabaseSession = Annotated[Session, Depends(get_db)]
 AuthenticatedPsychologist = Annotated[UUID, Depends(get_current_psychologist_id)]
 
 
-@router.get(
-    "/accounts/me/availability-rules", response_model=list[AvailabilityRuleRead]
-)
+@router.get("/accounts/me/availability-rules", response_model=list[AvailabilityRuleRead])
 def list_availability_rules(
     session: DatabaseSession, psychologist_id: AuthenticatedPsychologist
 ) -> list[AvailabilityRuleRead]:
@@ -49,12 +49,12 @@ def create_availability_rule(
     except service.AvailabilityConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except IntegrityError as exc:
-        raise HTTPException(status_code=409, detail="Availability rule conflicts with existing data") from exc
+        raise HTTPException(
+            status_code=409, detail="Availability rule conflicts with existing data"
+        ) from exc
 
 
-@router.put(
-    "/accounts/me/availability-rules/{rule_id}", response_model=AvailabilityRuleRead
-)
+@router.put("/accounts/me/availability-rules/{rule_id}", response_model=AvailabilityRuleRead)
 def update_availability_rule(
     rule_id: UUID,
     data: AvailabilityRuleInput,
@@ -68,7 +68,9 @@ def update_availability_rule(
     except service.AvailabilityConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except IntegrityError as exc:
-        raise HTTPException(status_code=409, detail="Availability rule conflicts with existing data") from exc
+        raise HTTPException(
+            status_code=409, detail="Availability rule conflicts with existing data"
+        ) from exc
     if rule is None:
         raise HTTPException(status_code=404, detail="Active availability rule not found")
     return rule
@@ -85,9 +87,7 @@ def delete_availability_rule(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get(
-    "/psychologists/{public_id}/availability", response_model=PublicAvailabilityRead
-)
+@router.get("/psychologists/{public_id}/availability", response_model=PublicAvailabilityRead)
 def get_public_availability(
     public_id: str,
     session: DatabaseSession,
@@ -116,4 +116,22 @@ def get_public_availability(
             )
             for slot in slots
         ],
+    )
+
+
+@router.get("/psychologists/{public_id}", response_model=PublicPsychologistRead)
+def get_public_psychologist_profile(
+    public_id: str, session: DatabaseSession
+) -> PublicPsychologistRead:
+    psychologist = accounts_api.psychologist_by_public_id(session, public_id)
+    if psychologist is None:
+        raise HTTPException(status_code=404, detail="Psychologist not found")
+    terms = service.public_profile_terms(session, psychologist.id)
+    return PublicPsychologistRead(
+        public_id=psychologist.public_id,
+        display_name=psychologist.display_name,
+        time_zone=psychologist.time_zone,
+        session_duration_minutes=terms[0] if terms else None,
+        price_minor=terms[1] if terms else None,
+        currency=terms[2] if terms else None,
     )

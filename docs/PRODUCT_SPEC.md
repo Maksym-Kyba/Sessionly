@@ -113,7 +113,9 @@ See `API_CONTRACT.md` and `DATABASE_DESIGN.md` for more concrete proposals.
   client communication?
 - Which email delivery provider will send verification links? What token lifetime and resend
   limits are appropriate? How should email link scanners be handled?
-- What are the Google OAuth callback URLs, account-linking rules and application session mechanism?
+- What Google OAuth client and registered callback URLs will be used in each environment? Existing
+  legacy psychologist rows without a linked Google subject require explicit manual resolution;
+  they are never linked automatically by email.
 - Are there exceptions to refund eligibility, and how will psychologists record and execute manual
   refunds?
 - What direct-contact information will be shown to clients?

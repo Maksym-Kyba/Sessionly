@@ -3,8 +3,9 @@
 ## Status
 
 The entities, columns, constraints and status names below are **PROPOSED** technical decisions for
-review. They guide implementation without constituting approved product requirements. Product
-rules are in `PRODUCT_SPEC.md`. No schema or Alembic migration is created by this document.
+review unless marked implemented. They guide implementation without constituting approved product
+requirements. Product rules are in `PRODUCT_SPEC.md`. The accounts authentication tables described
+below are implemented by the backend's new additive migration; other schemas remain proposals.
 
 ## Existing architecture constraints
 
@@ -28,16 +29,38 @@ rules are in `PRODUCT_SPEC.md`. No schema or Alembic migration is created by thi
 - `time_zone`
 - `created_at`, `updated_at`
 
-**PROPOSED `google_identities`**
+**Implemented `google_identities`**
 
 - `id` primary key
 - `psychologist_id` foreign key to `psychologists.id`
 - `google_subject` unique, stable Google account subject
 - `email_at_link_time`
-- `created_at`
+- `created_at`, `updated_at`
 
-No password credentials are proposed. OAuth tokens/session data are intentionally not specified
-until session and refresh-token requirements are decided.
+No password credentials are stored. The backend implementation uses Google's stable `sub` as the
+identity key and never links an existing psychologist by matching email. A matching email without
+the same linked Google subject requires manual resolution.
+
+**Implemented `auth_sessions`**
+
+- `id`, `psychologist_id` foreign key, unique `session_token_hash`
+- `created_at`, `expires_at`, nullable `revoked_at`
+
+The browser receives an opaque random token once in an HttpOnly cookie. Only its SHA-256 hash is
+stored. Sessions have a seven-day absolute expiry; concurrent sessions are allowed. Logout
+revokes the current row. No Google access or refresh token is stored for sign-in.
+
+**Implemented `oauth_transactions`**
+
+- `id`, unique `state_hash`, `browser_binding_hash`, `nonce_hash`, encrypted `pkce_verifier_encrypted`
+- `expires_at`, nullable `consumed_at`, `created_at`
+
+State, nonce, and browser binding are random, short-lived, and one-use. The browser binding is
+issued as a short-lived HttpOnly cookie so a valid callback must return in the browser that started
+the flow. The PKCE verifier is encrypted at rest with
+the configured OAuth state encryption key. Expired transaction rows are removed when a new login
+starts. A consumed transaction becomes unusable immediately and is removed on a later cleanup once
+expired. The implementation uses PKCE S256 and the `openid email profile` scopes only.
 
 ### `notifications` module
 
