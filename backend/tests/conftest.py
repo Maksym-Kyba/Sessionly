@@ -63,7 +63,7 @@ def clear_database(database_engine) -> Iterator[None]:
     with database_engine.begin() as connection:
         connection.execute(
             text(
-                "TRUNCATE TABLE auth_sessions, google_identities, oauth_transactions, "
+                "TRUNCATE TABLE bookings, auth_sessions, google_identities, oauth_transactions, "
                 "availability_slots, availability_rules, psychologists CASCADE"
             )
         )

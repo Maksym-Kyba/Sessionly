@@ -87,6 +87,13 @@ def slots_for_reconciliation(
     return list(session.scalars(statement))
 
 
+def get_slot(session: Session, slot_id: UUID, *, lock: bool = False) -> AvailabilitySlot | None:
+    statement = select(AvailabilitySlot).where(AvailabilitySlot.id == slot_id)
+    if lock:
+        statement = statement.with_for_update()
+    return session.scalar(statement)
+
+
 def reconcile_slots(
     session: Session,
     psychologist_id: UUID,

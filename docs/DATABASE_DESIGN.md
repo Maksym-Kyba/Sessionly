@@ -108,26 +108,27 @@ If a rule's start or end boundary is nonexistent on a DST transition date, the i
 that entire rule occurrence for that date.
 
 The implementation refreshes the rolling horizon on rule create/update/retirement and before a
-public availability read. **PROPOSED:** refresh and rule changes lock the psychologist row so
-concurrent refreshes reconcile a single desired slot set. Retired or superseded slots are marked
+public availability read. Refreshes and rule changes lock the psychologist row so concurrent
+refreshes reconcile a single desired slot set. Retired or superseded slots are marked
 `withdrawn` and retained; slot rows are never deleted by availability operations.
 
 ### `booking` module
 
-**PROPOSED `bookings`**
+**Implemented Phase A `bookings`**
 
-- `id`, `slot_id`, `psychologist_id`
-- `starts_at`, `ends_at` (`timestamptz`, copied from the selected slot for the appointment claim)
-- `client_email` (sensitive; redact from logs)
-- `access_token_hash` and nullable `access_token_expires_at` (**PROPOSED**; expiry policy
-  unresolved)
-- `status`
-- `created_at`, `updated_at`, `hold_expires_at`, `confirmed_at`, `completed_at`,
-  `cancel_requested_at`
+- `id`, `availability_slot_id`, `psychologist_id`
+- `starts_at`, `ends_at` (`timestamptz`), `session_duration_minutes`, `price_minor`, and `currency`
+  copied from the selected slot as booking-owned immutable snapshots
+- `status`, `created_at`, `updated_at`, `hold_expires_at`, nullable `confirmed_at`, and nullable
+  `payment_reference`
+- `client_email`, client access-token hashes, and token expiry are deferred to Phase B, after the
+  email-verification contract is agreed. No public hold-creation route exists in Phase A.
 
-The booking stores a price/currency snapshot or references an immutable slot price; this choice
-needs review. Cancellation/rescheduling is handled out of band, so `cancel_requested_at` is only a
-possible manual record, not a required product workflow.
+`hold_expires_at` is set by a PostgreSQL default using the same `statement_timestamp()` as
+`created_at`, plus exactly 15 minutes. The implemented Phase A statuses are uppercase `HELD`,
+`CONFIRMED`, and `EXPIRED`. `HELD -> CONFIRMED` and `HELD -> EXPIRED` are the only transitions in
+this phase. A successful confirmation records one unique payment reference. Cancellation and
+completion states are deferred.
 
 ### `payments` module
 
@@ -147,24 +148,11 @@ Do not store banking credentials or full sensitive provider payloads without an 
 
 ## Candidate statuses
 
-All names and exact transitions in this section are **PROPOSED**.
-
 ### Booking
 
-- `held` — created with `hold_expires_at = created_at + 15 minutes`; the appointment interval is
-  reserved until payment succeeds in time or the hold expires.
-- `confirmed` — payment confirmation was accepted before `hold_expires_at`.
-- `expired` — the deadline passed without timely accepted payment. This state releases the interval
-  for a new reservation.
-- `completed` — the session took place.
-- `cancelled` — a psychologist handled cancellation out of band and recorded the result, if the team
-  chooses to persist that status.
-
-**PROPOSED transitions:** `held -> confirmed` only for a timely payment; `held -> expired` at the
-15-minute deadline; `confirmed -> completed`; and optionally `confirmed -> cancelled` after an
-out-of-band cancellation. An expired booking remains `expired` after a late payment event; that event
-sets the payment to `manual_review` and can never confirm the booking. The exact authoritative
-payment timestamp is an unresolved policy question, not decided by this proposal.
+Implemented Phase A states are uppercase `HELD`, `CONFIRMED`, and `EXPIRED`. The implemented
+transitions are `HELD -> CONFIRMED` and `HELD -> EXPIRED`. A late payment cannot move an expired
+booking to confirmed. Future `COMPLETED` and cancellation states are deferred.
 
 ### Availability slot publication
 
@@ -186,38 +174,42 @@ holds or confirmed bookings. It never deletes or changes a confirmed booking.
 - `refund_pending` — a manual refund has been decided and is being processed out of band.
 - `refunded` — manual refund completion recorded.
 
-Only the booking module may transition `held` to `confirmed`, and only after its atomic deadline
+Only the booking module may transition `HELD` to `CONFIRMED`, and only after its atomic deadline
 check accepts the payment as timely. The authority and precedence of provider timestamps versus
 Sessionly's verified receipt time are unresolved and require team approval.
 
 ## Double-booking and expiry safeguards
 
 The 15-minute expiry, atomic replacement requirement, no-overlap rule and prohibition on automatic
-confirmation after expiry are approved business requirements. The PostgreSQL mechanisms below are
-**PROPOSED** technical decisions.
+confirmation after expiry are approved business requirements. Mechanisms marked implemented below
+are the Phase A technical implementation.
 
-1. Never read availability in Python and then create a hold in a separate operation.
-2. **PROPOSED:** set `hold_expires_at` from the database creation timestamp plus exactly 15 minutes.
-   Use a database timestamp, not an application host clock.
-3. **PROPOSED atomic replacement transaction:** resolve the requested published slot through
-   `availability.api`, transition relevant stale `held` bookings with
-   `hold_expires_at <= clock_timestamp()` to `expired`, then insert the new `held` booking in one
-   transaction. Booking owns all reservation state; changing a booking to `expired` removes its
-   interval from the active exclusion constraint. If slot validation, expiration or insertion fails,
-   roll back the transaction. This lazy expiry means no background timer is required to make an
-   expired hold reclaimable.
-4. **PROPOSED no-overlap constraint:** install PostgreSQL's trusted `btree_gist` extension and add
-   a partial exclusion constraint on the booking table:
+1. Never read availability in Python and then create a hold in a separate operation. Phase A's
+   internal service uses `availability.api` to read and lock the selected slot in the same SQLAlchemy
+   transaction as the booking insert.
+2. `created_at` and `hold_expires_at` use the PostgreSQL statement timestamp. The latter is exactly
+   15 minutes after the former, without relying on the application host clock.
+3. Hold creation locks rows in the order **psychologist → availability slot → booking rows**. The
+   availability module already locks the psychologist before changing rules and reconciling slots;
+   payment confirmation must follow psychologist → booking row. This shared psychologist lock
+   serializes availability changes, hold creation, expiry, and confirmation for one psychologist
+   without introducing a reverse lock order.
+4. In one transaction, hold creation transitions stale `HELD` rows for that psychologist where
+   `hold_expires_at <= clock_timestamp()` to `EXPIRED`, then inserts the new `HELD` booking. Failure
+   rolls the transaction back. Public availability filters active intervals against booking-owned
+   data; the database remains authoritative when a hold request is made.
+5. **Implemented no-overlap constraint:** the migration installs PostgreSQL's `btree_gist` extension
+   and adds a partial GiST exclusion constraint on the booking table:
 
    ```sql
    CREATE EXTENSION IF NOT EXISTS btree_gist;
 
    ALTER TABLE bookings
-     ADD CONSTRAINT no_overlapping_active_appointments
+     ADD CONSTRAINT ex_bookings_no_overlapping_active_appointments
      EXCLUDE USING gist (
        psychologist_id WITH =,
        tstzrange(starts_at, ends_at, '[)') WITH &&
-     ) WHERE (status IN ('held', 'confirmed'));
+     ) WHERE (status IN ('HELD', 'CONFIRMED'));
    ```
 
    The half-open range allows back-to-back appointments. The exclusion constraint rejects overlaps
@@ -225,45 +217,51 @@ confirmation after expiry are approved business requirements. The PostgreSQL mec
    range exclusion constraints support non-overlap, and `btree_gist` supplies GiST equality support
    for UUID psychologist IDs. The constraint creates its GiST index. The exact table owner and
    transaction/session arrangement must preserve module boundaries.
-5. A separate unique slot identity constraint may prevent duplicate generated slots, but it is not
-   a substitute for the range exclusion constraint. Add a B-tree index on `(hold_expires_at)` with
-   predicate `status = 'held'` to find expiration candidates. Do not use `now()` or
+6. A separate unique slot identity constraint prevents duplicate generated slots, but it is not
+   a substitute for the range exclusion constraint. A B-tree index on
+   `(psychologist_id, hold_expires_at)` with predicate `status = 'HELD'` finds expiration candidates.
+   Do not use `now()` or
    `clock_timestamp()` in a partial-index predicate: expired rows leave the active exclusion set
    through an explicit status transition.
-6. On exclusion violation or an unavailable/withdrawn slot result, roll back and return a conflict
+7. On exclusion violation or an unavailable/withdrawn slot result, roll back and return a conflict
    response. Make client retries idempotent with a unique idempotency key or equivalent operation
    identity.
-7. Serialize payment confirmation and expiry by updating/locking the booking row in a transaction.
-   Confirm only when status is still `held` and the approved payment-time comparison is before
-   `hold_expires_at`. Otherwise keep the booking `expired` and mark the payment `manual_review`;
-   never auto-confirm it even if the interval is free. The timestamp used for that comparison is
-   unresolved pending explicit team approval.
-8. Slot-claim changes go through `availability.api`; booking lifecycle transitions go through
-   `booking`. Any shared transaction/session mechanism across those APIs is **PROPOSED** and must
-   preserve table ownership boundaries.
+8. Internal `booking.api.get_payable_booking` returns only a live hold and its snapshotted amount and
+   currency. `booking.api.confirm_held_booking` locks the psychologist and booking row, then checks
+   the hold against `clock_timestamp()` within the transaction. It returns `CONFIRMED` only for a
+   successful result while the hold is active, `ALREADY_CONFIRMED` only for the same previously
+   recorded payment reference, `EXPIRED` for an expired hold, and `NOT_CONFIRMABLE` otherwise. It
+   never accepts caller-provided amount or currency. Payment recording and late-payment review remain
+   the Payments Module's responsibility.
+9. Availability owns and reconciles its slot rows without calling the Booking Module. A slot may be
+   withdrawn or updated when its rule changes, but the foreign key prevents deletion while a
+   booking references it. The booking's copied interval, duration, price and currency are unchanged.
+   The public availability route composes `availability.service` with `booking.api` to filter active
+   overlapping intervals; neither service imports the other module's implementation.
 
 ## Index and integrity proposals
 
 - Unique `google_subject`.
 - Unique slot identity per psychologist and start/end interval, to prevent duplicate generated
   slot records only.
-- **PROPOSED:** partial GiST exclusion constraint for active (`held`, `confirmed`) appointment
+- **Implemented:** partial GiST exclusion constraint for active (`HELD`, `CONFIRMED`) appointment
   ranges, as shown above; it prevents overlapping intervals per psychologist, not just identical
   timestamps.
-- **PROPOSED:** B-tree index on `hold_expires_at` with `WHERE status = 'held'` for expiry lookup.
+- **Implemented:** B-tree index on `hold_expires_at` with `WHERE status = 'HELD'` for expiry lookup.
   The status transition removes an expired hold from the exclusion constraint; time-dependent
   predicates are not used in indexes.
-- A late-payment booking in `expired` does not reclaim or block the interval automatically.
+- A late-payment booking in `EXPIRED` does not reclaim or block the interval automatically.
 - Unique verification-token hash.
 - Unique provider event identity where supplied.
-- Index availability by `(psychologist_id, starts_at)` and bookings by `(psychologist_id, status,
-  hold_expires_at)` through a deliberate ownership/reference design.
+- Availability slots are indexed by `(psychologist_id, starts_at)`; Booking uses the partial
+  `(psychologist_id, hold_expires_at)` expiry index and `(psychologist_id, status, starts_at)` query
+  index. These indexes support the current Phase A queries; add others only when measured access
+  patterns require them.
 - Foreign keys should use explicit delete behavior; cascade policy is not yet decided.
 
 ## Proposed concurrency test scenarios
 
-These scenarios should be covered by automated tests when the booking implementation is approved;
-this document adds no test code.
+These PostgreSQL scenarios are covered by the Booking Phase A test suite.
 
 1. Two simultaneous holds for the same slot: exactly one succeeds; the other receives a conflict.
 2. Two simultaneous holds for different partially overlapping slot intervals for one psychologist:
@@ -282,13 +280,10 @@ this document adds no test code.
 
 ## Open database decisions
 
-- Booking-access-token expiry, renewal and revocation policy.
 - Which payment timestamp is authoritative at the expiry boundary (provider confirmation time or
   Sessionly's verified receipt time)? This remains unresolved until the team approves the policy.
-- How to keep one atomic transaction while respecting module-owned tables and public APIs.
-- Whether expired bookings are persisted or derived from `hold_expires_at`.
 - Whether manual cancellation/refund outcomes are recorded in the application and who can write them.
-- Price snapshot policy and session duration limits beyond the current availability-window check.
+- Booking access-token expiry, renewal and revocation policy for Phase B.
+- Session duration limits beyond the current availability-window check.
 - Whether currencies beyond the initial `UAH` support should be enabled.
-- OAuth session/refresh-token storage and client verification retention.
-- Exact PostgreSQL constraints/indexes after API and workflow review.
+- Client verification-token retention policy.

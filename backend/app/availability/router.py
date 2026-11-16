@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.accounts import api as accounts_api
 from app.accounts.dependencies import get_current_psychologist_id
 from app.availability import service
+from app.booking import api as booking_api
 from app.availability.schemas import (
     AvailabilityRuleInput,
     AvailabilityRuleRead,
@@ -103,6 +104,11 @@ def get_public_availability(
     if result is None:
         raise HTTPException(status_code=404, detail="Psychologist not found")
     psychologist, slots = result
+    available_slot_ids = booking_api.available_slot_ids(
+        session,
+        psychologist.id,
+        [(slot.id, slot.starts_at, slot.ends_at) for slot in slots],
+    )
     return PublicAvailabilityRead(
         psychologist_id=psychologist.public_id,
         time_zone=psychologist.time_zone,
@@ -115,6 +121,7 @@ def get_public_availability(
                 currency=slot.currency,
             )
             for slot in slots
+            if slot.id in available_slot_ids
         ],
     )
 
