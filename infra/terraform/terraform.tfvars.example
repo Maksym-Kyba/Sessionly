@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars (not committed) and fill in your own values.
+
+# Your public IP address with /32, for example "203.0.113.10/32".
+ssh_allowed_cidr = "203.0.113.10/32"
+
+# Optional overrides:
+# aws_profile         = "sessionly"
+# aws_region          = "eu-north-1"
+# ssh_public_key_path = "~/.ssh/sessionly.pub"

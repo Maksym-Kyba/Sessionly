@@ -168,7 +168,8 @@ Stop PostgreSQL with `docker compose down`. To remove its persistent local data 
 ## Deployment
 
 The production target is one AWS EC2 instance running Docker Compose, with Caddy for HTTPS and
-Terraform configuration under `infra/`.
+Terraform configuration under `infra/`. See [`infra/README.md`](infra/README.md) for step-by-step
+instructions on creating the server, configuring it and deploying a release.
 
 ## Documentation Status
 
