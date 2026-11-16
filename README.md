@@ -137,7 +137,7 @@ In a second terminal, start the backend:
 cd backend
 uv sync
 uv run alembic upgrade head
-uv run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload --no-access-log
 ```
 
 Run the Backend tests with an isolated temporary PostgreSQL database:
@@ -152,11 +152,26 @@ The test database fixture creates and drops a uniquely named database using the 
 `TEST_DATABASE_URL` credentials. The PostgreSQL role therefore needs permission to create
 databases. The test fixture never connects to or modifies the configured application database.
 
+To enable psychologist Google sign-in locally, configure a Google OAuth web client with the exact
+redirect URI `http://localhost:8000/api/v1/auth/google/callback`. Set `GOOGLE_CLIENT_ID`,
+`GOOGLE_CLIENT_SECRET`, `OAUTH_STATE_ENCRYPTION_KEY`, and `CSRF_SECRET_KEY` in the untracked `.env`
+file. Generate the encryption key from `backend/` with:
+
+```bash
+uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+```
+
+Generate `CSRF_SECRET_KEY` with `uv run python -c 'import secrets; print(secrets.token_urlsafe(32))'`.
+
+Keep the local frontend redirect allowlist from `.env.example`; configured success and error URLs
+must match an allowlist entry exactly. OAuth login returns HTTP 503 until configured. There is no
+development authentication bypass.
+
 The local PostgreSQL service is available at `127.0.0.1:15432` and maps to port `5432` inside
 the container. `DATABASE_URL` in `.env` is for a backend process running on the host. If the
 backend runs as a Docker Compose service, configure it with
 `postgresql+psycopg://sessionly:sessionly_local@db:5432/sessionly`; `db` is the Compose service name.
-There are no application tables or migration revisions yet.
+Apply schema changes with `uv run alembic upgrade head` before starting the backend.
 
 - Backend health: http://localhost:8000/health
 - Backend API documentation: http://localhost:8000/docs
@@ -169,6 +184,14 @@ Stop PostgreSQL with `docker compose down`. To remove its persistent local data 
 
 The production target is one AWS EC2 instance running Docker Compose, with Caddy for HTTPS and
 Terraform configuration under `infra/`.
+
+The backend uses a seven-day absolute session lifetime and an HttpOnly cookie. HTTPS deployments
+must set `APP_ENV=production` and `SESSION_COOKIE_SECURE=true`; production config validation also
+requires HTTPS callback, CORS, and frontend redirect URLs. `SameSite=Lax` is the default and works when frontend and
+backend are same-site. Cross-site hosting requires `SameSite=None; Secure`, credentialed CORS for
+the exact frontend origin, and frontend agreement on CSRF handling. This repository currently has
+no `infra/` or Caddy configuration, so production domains and cookie topology still need
+deployment confirmation.
 
 ## Documentation Status
 

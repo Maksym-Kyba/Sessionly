@@ -2,9 +2,10 @@
 
 ## Status
 
-All routes, payloads, status codes and examples in this document are **PROPOSED**. They are
-concrete review material for implementation planning, not approved API requirements. Product
-rules in `PRODUCT_SPEC.md` remain authoritative.
+Routes and payloads in this document are **PROPOSED** unless a section says they are implemented.
+The psychologist OAuth/session endpoints and public profile route below are implemented on the
+backend branch; booking, email verification, availability filtering and payment contracts remain
+proposals. Product rules in `PRODUCT_SPEC.md` remain authoritative.
 
 Base path proposal: `/api/v1`. JSON is used unless a route redirects to an OAuth provider. Times
 are RFC 3339 timestamps in UTC. IDs are opaque strings in examples.
@@ -24,9 +25,22 @@ here.
 - `POST /api/v1/auth/logout` — invalidate the current psychologist session.
 - `GET /api/v1/accounts/me` — return the authenticated psychologist profile.
 
-**PROPOSED callback outcome:** set a secure, HTTP-only, same-site session cookie and redirect to the
-frontend. Token storage/session details and account-linking rules require approval. No password or
-alternate psychologist login endpoint is proposed.
+**Implemented callback/session behavior:** set a secure, HttpOnly session cookie and redirect to
+the configured, allowlisted frontend URL. The implementation uses an opaque server-side session token
+whose SHA-256 hash is stored in the database, with a seven-day absolute expiry. Multiple sessions
+are allowed. OAuth state and nonce are one-use, PKCE uses S256, and the Google ID token is verified
+server-side. OAuth state is also bound to a short-lived HttpOnly browser cookie; callbacks that
+arrive from a different browser are rejected. Existing accounts are never linked by email; a
+matching email without a linked Google subject returns a generic `account_unavailable` callback
+result. No password or alternate psychologist login endpoint is proposed.
+
+`GET /api/v1/accounts/me` returns the psychologist profile and a session-bound `csrf_token`. Cookie
+authenticated POST/PUT/DELETE requests, including logout and availability changes, must send that
+value in `X-CSRF-Token` and an allowed `Origin`. The session cookie is HttpOnly; local HTTP uses
+`SameSite=Lax` with `Secure=false`, while HTTPS deployments use `Secure=true`. The default
+production cookie name uses the `__Host-` prefix, `Path=/`, and no `Domain` attribute. If frontend
+and backend are cross-site in production, the deployment must explicitly use `SameSite=None` and
+HTTPS; this requires frontend confirmation.
 
 ### Client email verification
 
@@ -75,17 +89,24 @@ unresolved. Clients do not receive accounts or persistent sessions.
 
 - `GET /api/v1/psychologists/{public_id}` — return the public booking-page profile.
 
-Response example (**PROPOSED**):
+Current response example (values shown as null because profile terms vary or no future slots exist):
 
 ```json
 {
   "public_id": "psych_123",
   "display_name": "Dr. Example",
-  "session_duration_minutes": 50,
-  "price_minor": 120000,
-  "currency": "UAH"
+  "time_zone": "Europe/Kyiv",
+  "session_duration_minutes": null,
+  "price_minor": null,
+  "currency": null
 }
 ```
+
+`session_duration_minutes`, `price_minor`, and `currency` are returned only when all future
+published availability slots share the same values; otherwise all three fields are `null`. This
+uses availability data without inventing a profile-wide rate. The frontend should display each
+slot's own values when the profile fields are null. Whether the profile response should use this
+nullable shape or omit profile-level terms entirely remains a frontend/API contract question.
 
 ## Availability
 

@@ -62,7 +62,10 @@ def database_engine(isolated_database_url: URL):
 def clear_database(database_engine) -> Iterator[None]:
     with database_engine.begin() as connection:
         connection.execute(
-            text("TRUNCATE TABLE availability_slots, availability_rules, psychologists CASCADE")
+            text(
+                "TRUNCATE TABLE auth_sessions, google_identities, oauth_transactions, "
+                "availability_slots, availability_rules, psychologists CASCADE"
+            )
         )
     yield
 
@@ -105,3 +108,21 @@ async def authenticated_client(database_engine, psychologist) -> Iterator[AsyncC
     finally:
         app.dependency_overrides.clear()
 
+
+@pytest.fixture
+async def api_client(database_engine) -> Iterator[AsyncClient]:
+    factory = sessionmaker(bind=database_engine, autoflush=False, autocommit=False)
+
+    def override_get_db():
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides.clear()
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
