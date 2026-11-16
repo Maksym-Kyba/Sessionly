@@ -115,7 +115,8 @@ Modules: `accounts`, `availability`, `booking`, `payments`, `calendar`, `notific
 - Production payment provider, settlement flow and webhook security model.
 - Email delivery provider, verification-link token lifetime, resend limits and handling of link
   scanners or repeated clicks.
-- Google OAuth client configuration, callback URLs, account-linking policy and session mechanism.
+- Google OAuth client configuration, registered callback URLs, and how any legacy psychologist
+  rows without a linked Google subject will be resolved.
 - Cancellation-policy exceptions and manual refund operations.
 - Google Calendar synchronisation frequency.
 - Which payment timestamp is authoritative at the hold-expiry boundary.

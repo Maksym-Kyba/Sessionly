@@ -1,4 +1,4 @@
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Iterable
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -102,8 +102,7 @@ def _validate_rule_overlaps(
         ):
             continue
         wall_times_overlap = (
-            rule.local_start < other.local_end
-            and other.local_start < rule.local_end
+            rule.local_start < other.local_end and other.local_start < rule.local_end
         )
         if wall_times_overlap and not _same_weekly_schedule(rule, other):
             raise AvailabilityConflict(
@@ -153,9 +152,7 @@ def create_rule(
         if accounts_api.psychologist_by_id(session, psychologist_id, lock=True) is None:
             raise LookupError("Psychologist not found")
         rule = repository.add_rule(session, psychologist_id, data.model_dump())
-        _validate_rule_overlaps(
-            repository.list_active_rules(session, psychologist_id), rule
-        )
+        _validate_rule_overlaps(repository.list_active_rules(session, psychologist_id), rule)
         _materialize(session, psychologist_id)
         session.flush()
     return rule
@@ -171,9 +168,7 @@ def update_rule(
         if rule is None or not rule.is_active:
             return None
         repository.update_rule_fields(session, rule, data.model_dump())
-        _validate_rule_overlaps(
-            repository.list_active_rules(session, psychologist_id), rule
-        )
+        _validate_rule_overlaps(repository.list_active_rules(session, psychologist_id), rule)
         _materialize(session, psychologist_id)
         session.flush()
     return rule
@@ -215,3 +210,7 @@ def public_slots(
             session, psychologist.id, max(from_utc, datetime.now(UTC)), to_utc
         )
     return psychologist, slots
+
+
+def public_profile_terms(session: Session, psychologist_id: UUID) -> tuple[int, int, str] | None:
+    return repository.public_profile_terms(session, psychologist_id, datetime.now(UTC))

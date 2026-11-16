@@ -25,6 +25,27 @@ def list_active_rules(session: Session, psychologist_id: UUID) -> list[Availabil
     return list(session.scalars(statement))
 
 
+def public_profile_terms(
+    session: Session, psychologist_id: UUID, now: datetime
+) -> tuple[int, int, str] | None:
+    slots = session.scalars(
+        select(AvailabilitySlot).where(
+            AvailabilitySlot.psychologist_id == psychologist_id,
+            AvailabilitySlot.state == "published",
+            AvailabilitySlot.starts_at >= now,
+        )
+    )
+    terms = {
+        (
+            int((slot.ends_at - slot.starts_at).total_seconds() // 60),
+            slot.price_minor,
+            slot.currency,
+        )
+        for slot in slots
+    }
+    return next(iter(terms)) if len(terms) == 1 else None
+
+
 def add_rule(session: Session, psychologist_id: UUID, values: dict) -> AvailabilityRule:
     rule = AvailabilityRule(psychologist_id=psychologist_id, **values)
     session.add(rule)
@@ -32,9 +53,7 @@ def add_rule(session: Session, psychologist_id: UUID, values: dict) -> Availabil
     return rule
 
 
-def update_rule_fields(
-    session: Session, rule: AvailabilityRule, values: dict
-) -> AvailabilityRule:
+def update_rule_fields(session: Session, rule: AvailabilityRule, values: dict) -> AvailabilityRule:
     for name, value in values.items():
         setattr(rule, name, value)
     session.flush()

@@ -37,7 +37,10 @@ class AvailabilityRuleInput(BaseModel):
         if self.local_end <= self.local_start:
             raise ValueError("local_end must be later than local_start on the same weekday")
         window_minutes = int(
-            (datetime.combine(date.min, self.local_end) - datetime.combine(date.min, self.local_start))
+            (
+                datetime.combine(date.min, self.local_end)
+                - datetime.combine(date.min, self.local_start)
+            )
             / timedelta(minutes=1)
         )
         if self.session_duration_minutes > window_minutes:
@@ -79,3 +82,12 @@ class PublicAvailabilityRead(BaseModel):
     psychologist_id: str
     time_zone: str
     slots: list[AvailabilitySlotRead]
+
+
+class PublicPsychologistRead(BaseModel):
+    public_id: str
+    display_name: str
+    time_zone: str
+    session_duration_minutes: int | None
+    price_minor: int | None
+    currency: str | None
