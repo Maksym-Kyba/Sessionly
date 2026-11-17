@@ -5,11 +5,13 @@ side whether it accepts the payment. It never changes booking state and never ch
 booking lifecycle transitions and the 15-minute hold validation belong to the booking module.
 
 The booking confirmation is received as a function parameter, so this module does not import the
-booking module. Once `booking.api` exists, a small adapter will connect it to `ConfirmBooking`.
+booking module. A small adapter will later connect `booking.api.confirm_held_booking` to
+`ConfirmBooking`.
 
-PROPOSED: status and decision names below are review material, not final requirements. Payments
-are not persisted yet; a `session` parameter and durable records will be added with the payments
-table.
+The four booking confirmation decisions match the booking module's agreed confirmation outcomes.
+PROPOSED: payment status names and the provisional handling of NOT_CONFIRMABLE are review
+material, not final requirements. Payments are not persisted yet; a `session` parameter and
+durable records will be added with the payments table.
 """
 
 from dataclasses import dataclass
@@ -27,19 +29,29 @@ class PaymentStatus(StrEnum):
 
 
 class BookingConfirmationDecision(StrEnum):
-    """The answer the payments module needs from booking confirmation."""
+    """The booking module's answer to a successful payment.
 
-    CONFIRMED = "confirmed"
-    ALREADY_CONFIRMED = "already_confirmed"
-    NOT_CONFIRMED = "not_confirmed"
+    Values match the booking module's confirmation outcomes so that the future adapter can map them
+    directly.
+    """
+
+    CONFIRMED = "CONFIRMED"
+    ALREADY_CONFIRMED = "ALREADY_CONFIRMED"
+    EXPIRED = "EXPIRED"
+    NOT_CONFIRMABLE = "NOT_CONFIRMABLE"
+
+
+class PaymentSettlementError(Exception):
+    """A gateway outcome or booking decision is not one this service knows how to settle."""
 
 
 class ConfirmBooking(Protocol):
     def __call__(self, booking_id: UUID, payment_reference: str) -> BookingConfirmationDecision:
         """Ask the booking side to accept a successful payment for a booking.
 
-        The implementation, owned by the booking module, decides whether the hold is still active.
-        Repeating the call with the same payment reference must be safe.
+        The implementation, owned by the booking module, checks whether the hold is still active
+        and whether a confirmed booking was confirmed by this same payment reference. Repeating
+        the call with the same payment reference must be safe.
         """
         ...
 
@@ -54,7 +66,11 @@ class PaymentSettlement:
 _STATUS_BY_DECISION = {
     BookingConfirmationDecision.CONFIRMED: PaymentStatus.SUCCEEDED,
     BookingConfirmationDecision.ALREADY_CONFIRMED: PaymentStatus.SUCCEEDED,
-    BookingConfirmationDecision.NOT_CONFIRMED: PaymentStatus.MANUAL_REVIEW,
+    BookingConfirmationDecision.EXPIRED: PaymentStatus.MANUAL_REVIEW,
+    # PROPOSED, provisional: the money was collected but the booking will not be confirmed, so
+    # the payment is kept for manual review rather than treated as succeeded or discarded. The
+    # final policy for NOT_CONFIRMABLE requires team approval.
+    BookingConfirmationDecision.NOT_CONFIRMABLE: PaymentStatus.MANUAL_REVIEW,
 }
 
 
@@ -65,18 +81,22 @@ def process_booking_payment(
 ) -> PaymentSettlement:
     """Collect a payment and settle it against booking confirmation.
 
-    A failed payment never reaches booking confirmation. A successful payment that booking does
-    not confirm, for example because the hold has expired, requires manual review and is never
-    treated as a confirmed booking.
+    Only a successful payment reaches booking confirmation; a failed payment never does, and an
+    unknown outcome raises `PaymentSettlementError` without contacting booking. A successful
+    payment that booking does not confirm requires manual review and is never treated as a
+    confirmed booking.
     """
     result = gateway.process_payment(request)
-    if result.outcome is PaymentOutcome.FAILED:
+    if result.outcome is PaymentOutcome.SUCCEEDED:
+        decision = confirm_booking(request.booking_id, result.provider_reference)
+        try:
+            status = _STATUS_BY_DECISION[BookingConfirmationDecision(decision)]
+        except ValueError as exc:
+            raise PaymentSettlementError("Unknown booking confirmation decision") from exc
+    elif result.outcome is PaymentOutcome.FAILED:
         status = PaymentStatus.FAILED
     else:
-        decision = BookingConfirmationDecision(
-            confirm_booking(request.booking_id, result.provider_reference)
-        )
-        status = _STATUS_BY_DECISION[decision]
+        raise PaymentSettlementError("Unknown payment outcome")
     return PaymentSettlement(
         status=status,
         provider=result.provider,

@@ -15,6 +15,7 @@ from app.payments.service import (
     BookingConfirmationDecision,
     ConfirmBooking,
     PaymentSettlement,
+    PaymentSettlementError,
     PaymentStatus,
     process_booking_payment,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "PaymentRequest",
     "PaymentResult",
     "PaymentSettlement",
+    "PaymentSettlementError",
     "PaymentStatus",
     "process_booking_payment",
 ]
