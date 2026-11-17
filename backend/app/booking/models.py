@@ -37,6 +37,11 @@ class Booking(Base):
         CheckConstraint("currency = 'UAH'", name="ck_bookings_currency"),
         CheckConstraint("status IN ('HELD', 'CONFIRMED', 'EXPIRED')", name="ck_bookings_status"),
         UniqueConstraint("payment_reference", name="uq_bookings_payment_reference"),
+        UniqueConstraint("client_access_token_hash", name="uq_bookings_client_access_token_hash"),
+        CheckConstraint(
+            "(client_access_token_hash IS NULL) = (client_access_token_expires_at IS NULL)",
+            name="ck_bookings_access_token_fields",
+        ),
         Index(
             "ix_bookings_expiration_candidates",
             "psychologist_id",
@@ -69,6 +74,9 @@ class Booking(Base):
     session_duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     price_minor: Mapped[int] = mapped_column(Integer, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    client_email: Mapped[str | None] = mapped_column(String(320))
+    client_access_token_hash: Mapped[str | None] = mapped_column(String(64))
+    client_access_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(16), nullable=False, default=BookingStatus.HELD)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.statement_timestamp(), nullable=False
@@ -85,4 +93,27 @@ class Booking(Base):
         server_default=func.clock_timestamp(),
         onupdate=func.clock_timestamp(),
         nullable=False,
+    )
+
+
+class BookingIdempotencyKey(Base):
+    __tablename__ = "booking_idempotency_keys"
+
+    key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    verification_grant_hash: Mapped[str | None] = mapped_column(String(64))
+    booking_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("bookings.id", ondelete="RESTRICT")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.statement_timestamp(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("booking_id", name="uq_booking_idempotency_booking"),
+        CheckConstraint(
+            "(booking_id IS NULL) = (verification_grant_hash IS NULL)",
+            name="ck_booking_idempotency_completion_fields",
+        ),
+        Index("ix_booking_idempotency_created_at", "created_at"),
     )

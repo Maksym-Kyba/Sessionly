@@ -10,11 +10,15 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import sessionmaker
 
-from app.accounts.dependencies import get_current_psychologist_id
+from app.accounts.dependencies import (
+    get_current_psychologist_id,
+    get_optional_current_psychologist_id,
+)
 from app.accounts.models import Psychologist
 from app.core.config import settings
 from app.core.database import get_db
 from app.main import app
+from app.notifications.email_sender import DevelopmentEmailSender
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
@@ -63,8 +67,10 @@ def clear_database(database_engine) -> Iterator[None]:
     with database_engine.begin() as connection:
         connection.execute(
             text(
-                "TRUNCATE TABLE bookings, auth_sessions, google_identities, oauth_transactions, "
-                "availability_slots, availability_rules, psychologists CASCADE"
+                "TRUNCATE TABLE booking_idempotency_keys, bookings, "
+                "public_rate_limit_buckets, booking_verification_grants, "
+                "email_verification_tokens, auth_sessions, google_identities, "
+                "oauth_transactions, availability_slots, availability_rules, psychologists CASCADE"
             )
         )
     yield
@@ -91,6 +97,13 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture
+def email_sender() -> DevelopmentEmailSender:
+    sender = DevelopmentEmailSender()
+    app.state.email_sender = sender
+    return sender
+
+
+@pytest.fixture
 async def authenticated_client(database_engine, psychologist) -> Iterator[AsyncClient]:
     factory = sessionmaker(bind=database_engine, autoflush=False, autocommit=False)
 
@@ -100,6 +113,7 @@ async def authenticated_client(database_engine, psychologist) -> Iterator[AsyncC
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_psychologist_id] = lambda: psychologist.id
+    app.dependency_overrides[get_optional_current_psychologist_id] = lambda: psychologist.id
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://testserver"
@@ -110,7 +124,7 @@ async def authenticated_client(database_engine, psychologist) -> Iterator[AsyncC
 
 
 @pytest.fixture
-async def api_client(database_engine) -> Iterator[AsyncClient]:
+async def api_client(database_engine, email_sender) -> Iterator[AsyncClient]:
     factory = sessionmaker(bind=database_engine, autoflush=False, autocommit=False)
 
     def override_get_db():

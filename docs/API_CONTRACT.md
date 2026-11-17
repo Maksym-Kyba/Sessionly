@@ -3,9 +3,9 @@
 ## Status
 
 Routes and payloads in this document are **PROPOSED** unless a section says they are implemented.
-The psychologist OAuth/session endpoints and public profile route below are implemented on the
-backend branch; booking, email verification, availability filtering and payment contracts remain
-proposals. Product rules in `PRODUCT_SPEC.md` remain authoritative.
+The psychologist OAuth/session endpoints, public profile, availability, and Booking Phase A and B
+flows are implemented on the backend branch. Payment routes in this document remain proposals and
+are not implemented. Product rules in `PRODUCT_SPEC.md` remain authoritative.
 
 Base path proposal: `/api/v1`. JSON is used unless a route redirects to an OAuth provider. Times
 are RFC 3339 timestamps in UTC. IDs are opaque strings in examples.
@@ -44,17 +44,17 @@ HTTPS; this requires frontend confirmation.
 
 ### Client email verification
 
-- `POST /api/v1/email-verifications` — request a one-time link. Return the same generic response
-  whether or not delivery is possible to avoid disclosing email registration state.
+- `POST /api/v1/email-verifications` — request a one-time link. Return the same generic `202`
+  response for a known or unknown psychologist and for rate-limited requests.
 - `POST /api/v1/email-verifications/consume` — consume the token extracted by the frontend from
-  the emailed link and return a short-lived booking verification token.
+  the emailed link and return a one-time, 30-minute booking verification grant.
 
 Request example:
 
 ```json
 {
   "email": "client@example.test",
-  "psychologist_id": "psy_123"
+  "psychologist_public_id": "psych_123"
 }
 ```
 
@@ -78,12 +78,27 @@ Consume request and response examples:
 {
   "status": "verified",
   "booking_verification_token": "short-lived-booking-token",
-  "expires_at": "2026-11-15T12:30:00Z"
+  "expires_at": "2026-11-15T12:30:00Z",
+  "psychologist_public_id": "psych_123"
 }
 ```
 
-The verification-token lifetime, email provider, resend limits and scanner-safe link flow are
-unresolved. Clients do not receive accounts or persistent sessions.
+`psychologist_public_id` is resolved from the consumed verification record and its associated
+psychologist. The consume request accepts only the one-time token; any client-supplied psychologist
+identifier is ignored and never determines the response scope. Invalid, expired, or consumed tokens
+return the same generic error without a psychologist identifier.
+
+Implemented behavior: verification links and booking verification grants expire after 30 minutes.
+Tokens are generated with 256 bits of randomness, only SHA-256 hashes are stored, and each link and
+grant can be consumed once. The link token is placed in the URL fragment (`#token=...`) so browsers
+do not send it to frontend servers or include it in HTTP request logs. The frontend extracts the
+fragment and submits it in the POST body; GET requests never consume tokens. Email requests are
+limited to three per email per hour and one hundred per psychologist per hour; link consumption is
+limited to 300 requests per minute application-wide. The local development
+sender captures links in process memory for tests and does not expose them through an API route.
+If delivery is not configured or the sender reports an operational error, the endpoint returns a
+generic `503` without persisting the new token. Clients do not receive accounts or persistent
+sessions.
 
 ## Public psychologist profile
 
@@ -179,9 +194,10 @@ Whether slot duration, currency and price are represented this way is **PROPOSED
 
 ## Booking
 
-**Phase A implementation status:** the database model and internal Booking Module API are
-implemented. There are no public booking HTTP endpoints in this phase. Phase B must add client
-email verification before exposing public hold creation.
+**Phase A status:** the database model, internal Booking Module API, 15-minute hold and exclusion
+constraint are implemented. **Phase B status:** client email verification, public hold creation,
+access-token retrieval and booking reads are implemented as described below. Payment processing
+remains outside this phase.
 
 The internal `booking.api.create_hold(session, slot_id)` creates a `HELD` reservation with the
 selected slot's appointment interval, duration, price, and currency copied as immutable booking
@@ -191,9 +207,55 @@ for the same psychologist; intervals are half-open `[start, end)`, so adjacent a
 allowed. Creation first transitions that psychologist's expired holds to `EXPIRED` in the same
 transaction.
 
-Public booking creation, client access credentials, idempotency keys, email verification, and
-booking HTTP routes remain Phase B work. They must not call `create_hold` until the one-time client
-email verification mechanism has approved the address.
+Public hold creation consumes a valid booking verification grant before calling the internal
+`create_hold` operation. The grant is scoped to the psychologist and verified email. Email
+verification occurs before hold creation; it never extends or resets a hold. Every hold therefore
+gets the full 15 minutes from its own database creation timestamp.
+
+### Public client booking endpoints
+
+`POST /api/v1/bookings` requires `Idempotency-Key` (16–128 characters) and the following body:
+
+```json
+{
+  "slot_id": "b9e421ae-5b3a-43fc-84ec-c871e63318af",
+  "booking_verification_token": "one-time-verified-grant"
+}
+```
+
+The first successful response is `201 Created` and includes the immutable appointment snapshot,
+`HELD` status, `hold_expires_at`, and an opaque `client_access_token`. The access token is returned
+only in this response; only its hash is stored. The response uses `Cache-Control: no-store` and
+contains no client email. Payment is not implemented in Phase B; the response's
+`payment_stage: "awaiting_payment_integration"` indicates that a verified client can proceed to the
+payment stage once the Payments Module is integrated. No public payment or confirmation route is
+provided here.
+
+Replaying the same idempotency key and slot returns `200 OK` with the same booking and original
+deadline and `idempotent_replay: true`. If the replay uses the same still-valid consumed grant, the
+response has `client_access_token: null`. If the client supplies a fresh grant, the server verifies
+that it belongs to the booking's email and psychologist, then rotates the access token and returns
+the new token. A different slot with the same key returns `409`; a grant for another email is
+rejected. Raw idempotency keys are not stored. A client that lost the original response can
+re-verify the email and replay the same key and slot to recover the booking ID and a new access
+token. The server never stores a plaintext token to reconstruct it.
+
+`GET /api/v1/bookings/{booking_id}` returns appointment status and snapshot values to either a
+client presenting `Authorization: Bearer <client_access_token>` or the psychologist who owns the
+booking and has a valid OAuth session. It never returns the client email or access token. Client
+access tokens expire 90 days after issue, can be recovered by re-verifying the email, and only the
+latest issued token remains valid. Responses use `Cache-Control: no-store`. A missing, invalid, or
+expired client token receives the same `404` booking response.
+
+`POST /api/v1/bookings/{booking_id}/access-token` recovers a lost credential. Its body contains a
+fresh one-time `booking_verification_token`; its email and psychologist scope must match the booking.
+The endpoint consumes the grant, replaces the stored token hash and returns a new token and expiry.
+The previous client access token is immediately invalidated.
+
+`POST /api/v1/bookings` returns `409 slot_unavailable` for an unavailable/withdrawn slot or an
+overlap, `409` for an idempotency-key mismatch, and `400` for an invalid or expired verification
+grant. Verification-link consumption and recovery reject invalid, expired, consumed, or
+out-of-scope tokens with a generic `400`. Public booking and credential responses are not cached.
 
 The internal payment integration API is also defined without implementing payments:
 
@@ -233,13 +295,12 @@ booking row.
   token returned by booking creation or an authenticated psychologist session.
 - `GET /api/v1/accounts/me/bookings` — list bookings for the authenticated psychologist.
 
-Create request:
+Create request (the `idempotency_key` is sent in the `Idempotency-Key` header):
 
 ```json
 {
-  "slot_id": "slot_456",
-  "booking_verification_token": "short-lived-booking-token",
-  "idempotency_key": "client-generated-unique-value"
+  "slot_id": "b9e421ae-5b3a-43fc-84ec-c871e63318af",
+  "booking_verification_token": "one-time-verified-grant"
 }
 ```
 
@@ -247,25 +308,25 @@ Success response (assuming database creation time `2026-11-15T12:00:00Z`):
 
 ```json
 {
-  "id": "book_789",
-  "status": "held",
-  "slot_id": "slot_456",
+  "id": "6e88d567-aeca-477d-a84b-243401925480",
+  "status": "HELD",
+  "slot_id": "b9e421ae-5b3a-43fc-84ec-c871e63318af",
+  "starts_at": "2026-11-18T12:00:00Z",
+  "ends_at": "2026-11-18T12:50:00Z",
+  "session_duration_minutes": 50,
+  "price_minor": 120000,
+  "currency": "UAH",
   "created_at": "2026-11-15T12:00:00Z",
   "hold_expires_at": "2026-11-15T12:15:00Z",
   "client_access_token": "opaque-high-entropy-token-returned-once",
-  "payment": {
-    "status": "pending",
-    "mode": "mock",
-    "action_url": "/api/v1/bookings/book_789/payments/mock"
-  }
+  "client_access_token_expires_at": "2027-02-13T12:00:00Z",
+  "idempotent_replay": false,
+  "payment_stage": "awaiting_payment_integration"
 }
 ```
 
-The `client_access_token` is a **PROPOSED** opaque, cryptographically random bearer token returned
-once over HTTPS. Store only a hash server-side and never log the token. The expiry and renewal policy
-for this token remain unresolved. The client sends it as
-`Authorization: Bearer <client_access_token>` when retrieving booking status. No client account is
-created.
+These endpoint and lifetime details are technical implementation choices for Phase B. No client
+account is created.
 
 A competing request for the same slot or any overlapping time for the same psychologist receives
 `409 slot_unavailable`. Adjacent appointments where one ends exactly when the next starts are
@@ -370,12 +431,10 @@ These are test cases to implement later; this document adds no test code.
 
 ## Open contract decisions
 
-- OAuth session mechanism, cookie policy, callback and account-linking behavior.
-- Email-link token lifetime, scanner-safe consumption, delivery and rate limiting.
-- Client access to booking status without creating a client account.
-- Currency/amount representation and availability-rule payloads.
+- Production email provider and its deployment configuration/credentials mechanism.
+- Currency/amount representation beyond the implemented initial UAH availability values.
 - Production payment provider, webhook authentication and payment/refund lifecycle.
 - Whether late-payment review is exposed to clients, psychologists, or both.
-- Booking access-token expiry, renewal and revocation policy.
+- Whether the current 90-day client access-token lifetime should be changed after frontend review.
 - Which payment timestamp is authoritative at hold expiry; this is explicitly unresolved pending
   team approval.
