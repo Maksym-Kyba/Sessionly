@@ -179,6 +179,54 @@ Whether slot duration, currency and price are represented this way is **PROPOSED
 
 ## Booking
 
+**Phase A implementation status:** the database model and internal Booking Module API are
+implemented. There are no public booking HTTP endpoints in this phase. Phase B must add client
+email verification before exposing public hold creation.
+
+The internal `booking.api.create_hold(session, slot_id)` creates a `HELD` reservation with the
+selected slot's appointment interval, duration, price, and currency copied as immutable booking
+snapshots. It uses the PostgreSQL clock for `created_at` and sets `hold_expires_at` exactly 15
+minutes later. A database exclusion constraint prevents overlapping `HELD` or `CONFIRMED` bookings
+for the same psychologist; intervals are half-open `[start, end)`, so adjacent appointments are
+allowed. Creation first transitions that psychologist's expired holds to `EXPIRED` in the same
+transaction.
+
+Public booking creation, client access credentials, idempotency keys, email verification, and
+booking HTTP routes remain Phase B work. They must not call `create_hold` until the one-time client
+email verification mechanism has approved the address.
+
+The internal payment integration API is also defined without implementing payments:
+
+- `booking.api.get_payable_booking(session, booking_id)` returns the amount, currency, and deadline
+  only while the booking is still payable; values come from the booking snapshot.
+- `booking.api.confirm_held_booking(session, booking_id, payment_result)` returns
+  `CONFIRMED`, `ALREADY_CONFIRMED`, `EXPIRED`, or `NOT_CONFIRMABLE`. The same payment reference is
+  required for `ALREADY_CONFIRMED`. Confirmation checks the hold against the database clock while
+  holding the psychologist and booking locks. It does not accept an amount or currency from the
+  caller. Late results leave the booking expired and unconfirmed.
+
+`get_payable_booking` returns a `PayableBooking` value with `booking_id`, `amount_minor`, `currency`,
+and `hold_expires_at`. The payment module supplies a `PaymentResult` value containing
+`payment_reference` (a stable provider/mock reference, at most 255 characters; nullable for failed
+results; surrounding whitespace is trimmed) and `succeeded` (boolean). It must not supply an amount
+or currency. Only a verified provider event or trusted development mock may be passed to the internal
+confirmation API; an untrusted client request is not evidence of payment. The payable response is a
+snapshot, not a promise that the hold will remain active while
+the external payment is underway; confirmation always rechecks the deadline. A failed result returns
+`NOT_CONFIRMABLE` and leaves a still-live hold unchanged. A late result returns `EXPIRED`; the
+Payments Module records that payment for manual review. Reusing a reference already assigned to a
+different booking returns `NOT_CONFIRMABLE`. The reference is globally unique in Booking storage.
+
+The payment timestamp authority remains unresolved. For this phase, confirmation is accepted only
+if the hold is still active when the booking confirmation transaction performs its database-time
+check.
+
+These functions accept the shared SQLAlchemy `Session`. They start and commit a transaction when
+called with no active transaction; otherwise they join the caller's transaction. A caller that
+passes an active transaction owns its commit or rollback. The lock order is psychologist, then
+availability slot, then booking rows for hold creation; confirmation locks psychologist, then the
+booking row.
+
 - `POST /api/v1/bookings` — atomically expire applicable stale holds, claim a non-overlapping
   interval, and create a hold that expires exactly 15 minutes after database creation time.
 - `GET /api/v1/bookings/{booking_id}` — retrieve booking/payment progress using the client bearer

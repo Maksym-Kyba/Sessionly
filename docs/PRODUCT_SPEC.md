@@ -91,11 +91,11 @@ These proposals are not product requirements and need technical review:
 - **PROPOSED:** model Google OAuth identity separately from psychologist profile data.
 - **PROPOSED:** deliver verification links with random, single-use, expiring tokens; store only a
   token hash and consume it once. Delivery provider and token lifetime remain undecided.
-- **PROPOSED:** store `hold_expires_at` as the database creation time plus 15 minutes; atomically
-  expire stale holds and create a replacement hold in one transaction.
-- **PROPOSED:** use a PostgreSQL GiST exclusion constraint over psychologist ID and a half-open
-  appointment time range for rows in active booking states. A `btree_gist` operator class can
-  combine psychologist equality with range overlap; details are in `DATABASE_DESIGN.md`.
+- **Implemented in Booking Phase A:** store `hold_expires_at` as the PostgreSQL statement creation
+  time plus 15 minutes; atomically expire stale holds and create a replacement in one transaction.
+- **Implemented in Booking Phase A:** use a PostgreSQL GiST exclusion constraint over psychologist
+  ID and a half-open appointment time range for `HELD` and `CONFIRMED` bookings. `btree_gist`
+  combines psychologist equality with range overlap; details are in `DATABASE_DESIGN.md`.
 - **PROPOSED:** treat a late successful payment as a payment review case; leave the booking expired
   and unconfirmed, prevent automatic reassignment of that payment, and record any manual outcome
   for auditability.
