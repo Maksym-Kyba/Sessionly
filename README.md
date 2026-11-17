@@ -167,20 +167,30 @@ Keep the local frontend redirect allowlist from `.env.example`; configured succe
 must match an allowlist entry exactly. OAuth login returns HTTP 503 until configured. There is no
 development authentication bypass.
 
-Client booking verification works locally without an email provider. The development email sender
-captures verification URLs in process memory for tests and local debugging; it does not expose a
-public link-inspection endpoint. The frontend verification page should read the token from the URL
-fragment, remove it from browser history, and POST it to `/api/v1/email-verifications/consume`.
-Configure `CLIENT_VERIFICATION_LINK_BASE_URL` to that frontend page and set a unique
+Client booking verification uses one-time links. In local development, the default email sender
+captures verification URLs in process memory for tests; it does not expose a public link-inspection
+endpoint. The frontend verification page should read the token from the URL fragment, remove it from
+browser history, and POST it to `/api/v1/email-verifications/consume`. Configure
+`CLIENT_VERIFICATION_LINK_BASE_URL` to that frontend page and set a unique
 `CLIENT_VERIFICATION_SECRET_KEY` for each environment. The `.env.example` value is only a local
 placeholder. Email links and booking-verification grants expire after 30 minutes; client booking
 access tokens expire after 90 days and can be replaced after re-verifying the email.
 
-Production email delivery is not enabled by this Phase B implementation. Before deployment, add and
-configure an `EmailSender` provider adapter in the `notifications` module using credentials supplied
-through the deployment environment or secret store. Do not put provider credentials in Git. Until an
-adapter is configured, verification requests return a generic service-unavailable response. The
-configured verification URL must use HTTPS in production.
+For the November 2026 demo, production email uses a dedicated Gmail account through SMTP STARTTLS.
+The account must have 2-Step Verification and an available App Password. Use the account's exact
+Gmail address as `GMAIL_SMTP_USERNAME`; store the App Password in the ignored `infra/email.env`
+file on the server. Docker Compose passes that file only to the backend container. Never put real
+credentials in Git, an image, or application logs. Production selects Gmail only when configured;
+otherwise the sender fails closed and verification requests return a generic service-unavailable
+response. If Gmail reports a timeout after accepting a message, the committed verification token
+remains usable. Resends keep existing unexpired links valid; successfully consuming any link
+invalidates its outstanding siblings for that email and psychologist. The configured verification
+URL must use HTTPS in production.
+
+For a local real-email smoke test, set `EMAIL_PROVIDER=gmail_smtp`, `GMAIL_SMTP_USERNAME`, and
+`GMAIL_APP_PASSWORD` in the untracked root `.env`. Keep the default `EMAIL_PROVIDER=development` to
+use the in-memory test sender. See [`infra/README.md`](infra/README.md) for dedicated Gmail account
+setup and production deployment instructions.
 
 After verification, the frontend sends `POST /api/v1/bookings` with the one-time booking-verification
 token and an `Idempotency-Key` header. The response creates a 15-minute hold and returns a one-time
