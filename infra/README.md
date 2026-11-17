@@ -111,6 +111,11 @@ The script pulls the branch from GitHub on the server, builds the images, applie
 migrations through the `migrate` service and restarts the stack. Run it again for every new
 release.
 
+Migrations are only applied forward. Do not run `alembic downgrade` on the production database:
+downgrading below revision `20261118_0006` drops the `payments` table and permanently deletes
+payment history, including payments awaiting manual review. Treat any downgrade as a deliberate,
+approved operation and back up the database first.
+
 Check the deployment:
 
 ```bash

@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     client_verification_email_limit_per_hour: int = 3
     client_verification_psychologist_limit_per_hour: int = 100
     client_verification_consume_limit_per_minute: int = 300
+    # None means: enabled in development, disabled in production. The mock never moves real money.
+    mock_payments_enabled: bool | None = None
 
     model_config = SettingsConfigDict(
         env_file=REPOSITORY_ROOT / ".env",
@@ -131,6 +133,12 @@ class Settings(BaseSettings):
             ):
                 raise ValueError("Production frontend auth redirects must use HTTPS")
         return self
+
+    @property
+    def mock_payments_active(self) -> bool:
+        if self.mock_payments_enabled is None:
+            return self.app_env == "development"
+        return self.mock_payments_enabled
 
     @property
     def session_cookie_path(self) -> str:

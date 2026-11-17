@@ -5,7 +5,8 @@
 Routes and payloads in this document are **PROPOSED** unless a section says they are implemented.
 The psychologist OAuth/session endpoints, public profile, availability, and Booking Phase A and B
 flows, including the authenticated psychologist profile update, are implemented on the backend
-branch. Payment routes in this document remain proposals and are not implemented. Product rules in
+branch. Of the payment routes, only the development-only mock payment endpoint is implemented
+(Payments Phase 2); webhook and payment-status routes remain proposals. Product rules in
 `PRODUCT_SPEC.md` remain authoritative.
 
 Base path proposal: `/api/v1`. JSON is used unless a route redirects to an OAuth provider. Times
@@ -227,8 +228,9 @@ Whether slot duration, currency and price are represented this way is **PROPOSED
 
 **Phase A status:** the database model, internal Booking Module API, 15-minute hold and exclusion
 constraint are implemented. **Phase B status:** client email verification, public hold creation,
-access-token retrieval and booking reads are implemented as described below. Payment processing
-remains outside this phase.
+access-token retrieval and booking reads are implemented as described below. Booking does not
+process payments; the development-only mock payment route is provided by the Payments Module
+(see [Payments](#payments)).
 
 The internal `booking.api.create_hold(session, slot_id)` creates a `HELD` reservation with the
 selected slot's appointment interval, duration, price, and currency copied as immutable booking
@@ -257,10 +259,11 @@ gets the full 15 minutes from its own database creation timestamp.
 The first successful response is `201 Created` and includes the immutable appointment snapshot,
 `HELD` status, `hold_expires_at`, and an opaque `client_access_token`. The access token is returned
 only in this response; only its hash is stored. The response uses `Cache-Control: no-store` and
-contains no client email. Payment is not implemented in Phase B; the response's
-`payment_stage: "awaiting_payment_integration"` indicates that a verified client can proceed to the
-payment stage once the Payments Module is integrated. No public payment or confirmation route is
-provided here.
+contains no client email. The response still returns
+`payment_stage: "awaiting_payment_integration"`, introduced before the Payments Module existed.
+Aligning this field with the mock payment route is pending a decision by the Booking Module owner
+(PR #21 review); until then clients should rely on `status` and the payment response. The Booking
+Module itself provides no public payment or confirmation route.
 
 Replaying the same idempotency key and slot returns `200 OK` with the same booking and original
 deadline and `idempotent_replay: true`. If the replay uses the same still-valid consumed grant, the
@@ -288,7 +291,7 @@ overlap, `409` for an idempotency-key mismatch, and `400` for an invalid or expi
 grant. Verification-link consumption and recovery reject invalid, expired, consumed, or
 out-of-scope tokens with a generic `400`. Public booking and credential responses are not cached.
 
-The internal payment integration API is also defined without implementing payments:
+The internal payment integration API, used by the Payments Module:
 
 - `booking.api.get_payable_booking(session, booking_id)` returns the amount, currency, and deadline
   only while the booking is still payable; values come from the booking snapshot.
@@ -422,53 +425,114 @@ reservations indefinitely.
 
 ## Payments
 
-- `POST /api/v1/bookings/{booking_id}/payments/mock` — **development only**, simulate a payment
-  result without banking credentials. Proposed production behavior returns `404` or is absent.
+Payments Phase 2 implements a persisted, development-only mock payment endpoint. No production
+payment provider is integrated, and the mock never moves real money. Items marked **PROPOSED** have
+not been approved by the team.
 
-Request examples (**PROPOSED**):
+### Development mock payment
+
+- `POST /api/v1/bookings/{booking_id}/payments/mock` — simulate a payment for a held booking.
+
+**Availability.** The route is active when `MOCK_PAYMENTS_ENABLED` is `true`, or when it is unset
+and `APP_ENV=development`. Otherwise every request, including an unauthenticated one, returns
+`404`. The route is excluded from the published OpenAPI document because it is not part of the
+public API (agreed for the MVP in the PR #21 review). The deployed demonstration
+(`APP_ENV=production`) may set `MOCK_PAYMENTS_ENABLED=true` only for a controlled demonstration
+and must set it back to `false` afterwards: while it is enabled, any client holding a booking
+token can confirm that booking without paying.
+
+**Authorization.** The client presents the booking's client access token, using the same
+convention as `GET /api/v1/bookings/{booking_id}`:
+
+```http
+Authorization: Bearer <client_access_token>
+Idempotency-Key: <16-128 characters, generated by the client>
+```
+
+The Payments Module verifies the token through `booking.api.get_client_booking` before any new
+attempt or replay. A missing or malformed header returns `401`; an invalid or expired token, or an
+unknown booking, returns `404` so that booking existence is not disclosed.
+
+**Request.** The body accepts only `result`, which is `success` or `failure`. Unknown fields such as
+`amount_minor`, `currency` or `price_minor` are rejected with `422`. The amount and currency always
+come from the booking snapshot returned by `booking.api.get_payable_booking`.
 
 ```json
 {"result": "success"}
 ```
 
+**Response.** `201` for a new attempt and `200` when the same request is repeated with the same
+idempotency key. Responses are sent with `Cache-Control: no-store`.
+
 ```json
-{"result": "failure"}
+{
+  "payment_id": "6f8e2c1a-0d4b-4c55-9f1e-2b7a9c3d4e5f",
+  "booking_id": "2ae2f82b-96d7-44d2-a393-bead9c3ae441",
+  "payment_status": "succeeded",
+  "booking_decision": "CONFIRMED",
+  "amount_minor": 120000,
+  "currency": "UAH",
+  "provider": "mock",
+  "provider_reference": "mock_3f9a6c0e5b2d4a7f8e1c9b0a6d5e4f3c",
+  "created_at": "2026-11-18T10:00:00Z",
+  "updated_at": "2026-11-18T10:00:00Z",
+  "idempotent_replay": false
+}
 ```
 
-The `result` field accepts only `success` or `failure`; this endpoint does not accept provider
-credentials or personal banking tokens.
-- `POST /api/v1/payments/webhooks/{provider}` — future provider callback endpoint; provider name,
+`payment_status` is `succeeded`, `failed` or `manual_review`. `booking_decision` is the booking
+module's confirmation outcome, or `null` when booking was not asked (a failed payment) or could not
+answer. A payment confirmed after the hold expired returns `"payment_status": "manual_review"` and
+`"booking_decision": "EXPIRED"`; the booking stays expired and is never confirmed automatically.
+
+| Booking decision after a successful charge | Payment status |
+|---|---|
+| `CONFIRMED` | `succeeded` |
+| `ALREADY_CONFIRMED` (same payment reference) | `succeeded` |
+| `EXPIRED` | `manual_review` |
+| `NOT_CONFIRMABLE` | `manual_review` |
+| confirmation error | `manual_review` with `booking_decision: null` |
+
+**Errors.**
+
+| Status | `detail` | When |
+|---|---|---|
+| `401` | `Booking access is required` | Missing or malformed `Authorization` header |
+| `404` | `Booking not found` | Invalid or expired client token, or unknown booking |
+| `404` | `Not Found` | Mock payments are disabled |
+| `409` | `Idempotency key was already used for a different request` | Same key, different booking or result |
+| `409` | `Another payment for this booking is still being processed` | A pending attempt exists for the booking |
+| `409` | `A previous payment for this booking requires manual review` | A new key is used while a payment for the booking awaits manual review |
+| `409` | `Booking is not available for payment` | Booking expired, already confirmed or otherwise not payable |
+| `422` | `Booking cannot be paid` | Booking amount is not payable through the gateway (for example, `0`) |
+| `422` | validation details | Invalid body or `Idempotency-Key` header |
+
+**Idempotency and retries.** Repeating a request with the same key returns the recorded payment
+without charging again. If an earlier attempt with that key was interrupted before it finished, the
+retry resumes that attempt. A different key for a booking that is already confirmed is rejected
+before any charge.
+
+**Manual review blocks further charges.** Once any payment for a booking is recorded as
+`manual_review`, every new attempt for that booking (a new idempotency key) is rejected with
+`409` before the gateway is called, even if the booking is still `HELD`. This prevents a second
+charge when a successful charge could not be confirmed, for example because booking confirmation
+failed or timed out. Repeating the original request with the original key still returns the
+recorded `manual_review` payment with `200`. The check runs under the same per-booking lock that
+records `manual_review`, so concurrent attempts cannot pass it. Manual review is never cleared
+automatically and no refund is issued automatically; no resolution workflow is implemented yet.
+A client who still wants an appointment books it again, which creates a new booking.
+
+### Future endpoints (**PROPOSED**)
+
+- `POST /api/v1/payments/webhooks/{provider}` — production provider callback; provider name,
   signature scheme and exact payload are unresolved.
 - `GET /api/v1/bookings/{booking_id}/payment-status` — return payment and review state.
 
-Mock success example:
-
-```json
-{
-  "booking_id": "book_789",
-  "payment_status": "succeeded",
-  "booking_status": "confirmed"
-}
-```
-
-Late payment response example (**PROPOSED**):
-
-```json
-{
-  "booking_id": "book_789",
-  "payment_status": "manual_review",
-  "booking_status": "expired",
-  "message": "Payment received after the booking hold expired. The booking is not confirmed."
-}
-```
-
-The late event does not transition the booking from `expired` to `confirmed`; its payment remains
-subject to manual review and may require a refund. Which timestamp establishes that payment
-confirmation was before or after expiry remains unresolved pending team approval. Until then, this
-contract must not define a provider timestamp as authoritative.
-
-The late-payment result must never automatically confirm a booking, even if the slot appears free
-when the payment event is processed. Manual review may conclude that a refund is needed.
+Which timestamp establishes that a payment was confirmed before or after hold expiry remains
+unresolved pending team approval. The current implementation accepts a payment only if the hold is
+still active when booking's confirmation transaction performs its database-time check; this
+contract does not define a provider timestamp as authoritative. Manual review may conclude that a
+refund is needed; refunds remain manual.
 
 ## Direct-contact cancellation and rescheduling
 

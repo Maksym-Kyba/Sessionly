@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { signOut } from "@/api/auth";
+import { BookingsCard } from "@/components/dashboard/BookingsCard";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -13,7 +14,6 @@ import { useCurrentPsychologist } from "@/hooks/useCurrentPsychologist";
 type DashboardSection = { title: string; description: string; href?: string };
 
 const sections: DashboardSection[] = [
-  { title: "Записи", description: "Найближчі сесії та їхні статуси." },
   {
     title: "Доступність",
     description: "Робочі години, тривалість і вартість сесії.",
@@ -22,7 +22,7 @@ const sections: DashboardSection[] = [
   { title: "Профіль", description: "Ім'я, часовий пояс і посилання для клієнтів." },
 ];
 
-/** Psychologist dashboard. Currently confirms the session and offers sign-out. */
+/** Psychologist dashboard: bookings, links to settings pages and sign-out. */
 export default function DashboardPage() {
   const router = useRouter();
   const state = useCurrentPsychologist();
@@ -91,7 +91,9 @@ export default function DashboardPage() {
               </p>
             )}
 
-            <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <BookingsCard timeZone={state.psychologist.time_zone} />
+
+            <div className="mt-6 grid gap-4 sm:grid-cols-2">
               {sections.map((section) => (
                 <Card key={section.title} className="flex flex-col p-6">
                   <div className="flex items-start justify-between gap-3">
