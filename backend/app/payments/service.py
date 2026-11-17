@@ -9,9 +9,10 @@ booking module. A small adapter will later connect `booking.api.confirm_held_boo
 `ConfirmBooking`.
 
 The four booking confirmation decisions match the booking module's agreed confirmation outcomes.
-PROPOSED: payment status names and the provisional handling of NOT_CONFIRMABLE are review
-material, not final requirements. Payments are not persisted yet; a `session` parameter and
-durable records will be added with the payments table.
+Mapping both EXPIRED and NOT_CONFIRMABLE to manual review after a successful payment has been
+agreed with the booking module owner. PROPOSED: payment status names are review material, not
+final requirements. Payments are not persisted yet; a `session` parameter and durable records will
+be added with the payments table.
 """
 
 from dataclasses import dataclass
@@ -67,9 +68,9 @@ _STATUS_BY_DECISION = {
     BookingConfirmationDecision.CONFIRMED: PaymentStatus.SUCCEEDED,
     BookingConfirmationDecision.ALREADY_CONFIRMED: PaymentStatus.SUCCEEDED,
     BookingConfirmationDecision.EXPIRED: PaymentStatus.MANUAL_REVIEW,
-    # PROPOSED, provisional: the money was collected but the booking will not be confirmed, so
-    # the payment is kept for manual review rather than treated as succeeded or discarded. The
-    # final policy for NOT_CONFIRMABLE requires team approval.
+    # Agreed with the booking module owner: the money was collected but the booking will not be
+    # confirmed, so the payment is kept for manual review rather than treated as succeeded or
+    # discarded.
     BookingConfirmationDecision.NOT_CONFIRMABLE: PaymentStatus.MANUAL_REVIEW,
 }
 
