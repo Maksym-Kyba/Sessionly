@@ -109,7 +109,7 @@ function formFromRule(rule: AvailabilityRule): FormValues {
     localStart: shortTime(rule.local_start),
     localEnd: shortTime(rule.local_end),
     durationMinutes: String(rule.session_duration_minutes),
-    priceUah: String(rule.price_minor / 100),
+    priceUah: minorToPriceInput(rule.price_minor),
     validFrom: rule.valid_from,
     validUntil: rule.valid_until ?? "",
   };
@@ -119,6 +119,27 @@ const priceFormatter = new Intl.NumberFormat("uk-UA", { style: "currency", curre
 
 function formatPrice(priceMinor: number): string {
   return priceFormatter.format(priceMinor / 100);
+}
+
+/** Hryvnias with an optional fraction of at most two digits, separated by a dot or a comma. */
+const PRICE_PATTERN = /^(\d{1,7})(?:[.,](\d{1,2}))?$/;
+
+/**
+ * Parses a price entered in hryvnias into kopiykas using string arithmetic only, so that
+ * floating-point errors cannot change the amount. Returns `null` for any other format.
+ */
+function parsePriceMinor(input: string): number | null {
+  const match = PRICE_PATTERN.exec(input.trim());
+  if (!match) return null;
+  const [, hryvnias, kopiykas = ""] = match;
+  return Number(hryvnias) * 100 + Number(kopiykas.padEnd(2, "0"));
+}
+
+/** Formats kopiykas as an editable price string, e.g. `120050` as `1200,50`. */
+function minorToPriceInput(priceMinor: number): string {
+  const hryvnias = Math.floor(priceMinor / 100);
+  const kopiykas = priceMinor % 100;
+  return kopiykas === 0 ? String(hryvnias) : `${hryvnias},${String(kopiykas).padStart(2, "0")}`;
 }
 
 function formatDate(isoDate: string): string {
@@ -132,9 +153,9 @@ function toInput(values: FormValues): AvailabilityRuleInput | string {
   if (!Number.isInteger(duration) || duration <= 0) {
     return "Тривалість сесії має бути цілим додатним числом хвилин.";
   }
-  const price = Number(values.priceUah.trim().replace(",", "."));
-  if (values.priceUah.trim() === "" || !Number.isFinite(price) || price < 0) {
-    return "Вкажіть вартість сесії в гривнях.";
+  const priceMinor = parsePriceMinor(values.priceUah);
+  if (priceMinor === null) {
+    return "Вкажіть вартість у гривнях: ціле число або не більше двох знаків після коми, наприклад 1200 або 1200,50.";
   }
   if (!values.localStart || !values.localEnd || !values.validFrom) {
     return "Заповніть усі обов'язкові поля.";
@@ -144,7 +165,7 @@ function toInput(values: FormValues): AvailabilityRuleInput | string {
     local_start: values.localStart,
     local_end: values.localEnd,
     session_duration_minutes: duration,
-    price_minor: Math.round(price * 100),
+    price_minor: priceMinor,
     currency: "UAH",
     valid_from: values.validFrom,
     valid_until: values.validUntil || null,
@@ -258,6 +279,8 @@ export default function AvailabilityPage() {
   }
 
   const { psychologist } = state;
+  // `valid_until` is inclusive, so a rule has ended once that date is before today.
+  const today = todayIn(psychologist.time_zone);
 
   function startCreate() {
     setEditingId(null);
@@ -493,7 +516,14 @@ export default function AvailabilityPage() {
                   <Card className="flex h-full flex-col p-6">
                     <div className="flex items-start justify-between gap-3">
                       <h2 className="text-xl text-ink">{WEEKDAYS[rule.weekday]}</h2>
-                      {editingId === rule.id && <Badge tone="warning">Редагується</Badge>}
+                      {editingId === rule.id ? (
+                        <Badge tone="warning">Редагується</Badge>
+                      ) : (
+                        rule.valid_until !== null &&
+                        rule.valid_until < today && (
+                          <Badge tone="neutral">Термін дії завершився</Badge>
+                        )
+                      )}
                     </div>
                     <p className="mt-2 text-2xl font-bold text-ink">
                       {shortTime(rule.local_start)}–{shortTime(rule.local_end)}
