@@ -8,11 +8,20 @@ import { consumeEmailVerification } from "@/api/public";
 import { BookingPageShell } from "@/components/booking/BookingPageShell";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { loadPendingSelection, saveGrant } from "@/utils/clientBookingStorage";
+import {
+  loadPendingSelection,
+  type PendingSelection,
+  saveGrant,
+  type StoredGrant,
+} from "@/utils/clientBookingStorage";
+import { formatPrice, formatSlot } from "@/utils/format";
 import { holdSlot } from "@/utils/holdSlot";
 
 type VerifyState =
   | { status: "working" }
+  /** Email verified; the client confirms the slot explicitly before it is held. */
+  | { status: "confirm"; selection: PendingSelection; grant: StoredGrant }
+  | { status: "holding"; selection: PendingSelection }
   | { status: "invalid-link"; psychologistPublicId: string | null }
   | { status: "rate-limited" }
   | { status: "slot-taken"; psychologistPublicId: string }
@@ -35,11 +44,14 @@ function takeTokenFromFragment(): string | null {
 
 /**
  * Landing page of the email verification link (`CLIENT_VERIFICATION_LINK_BASE_URL`).
- * Consumes the one-time token and then holds the slot the client selected before verifying.
+ * Consumes the one-time token, then shows the slot the client selected and holds it only after an
+ * explicit confirmation. The selection is shared by all tabs of the browser, so holding it
+ * automatically could book a slot chosen later in another tab instead of the one this email was for.
  */
 export default function VerifyEmailPage() {
   const router = useRouter();
   const [state, setState] = useState<VerifyState>({ status: "working" });
+  const [retryFailed, setRetryFailed] = useState(false);
   // The token is single-use, so the flow must run exactly once, including in React strict mode.
   const started = useRef(false);
 
@@ -85,49 +97,104 @@ export default function VerifyEmailPage() {
         return;
       }
 
-      const result = await holdSlot(selection, grant);
-      switch (result.kind) {
-        case "held":
-          router.replace(`/bookings/${result.bookingId}`);
-          return;
-        case "slot-taken":
-          setState({ status: "slot-taken", psychologistPublicId: grant.psychologistPublicId });
-          return;
-        case "verification-invalid":
-          setState({ status: "invalid-link", psychologistPublicId: grant.psychologistPublicId });
-          return;
-        case "no-access":
-          setState({ status: "no-access" });
-          return;
-        default:
-          setState({ status: "error", psychologistPublicId: grant.psychologistPublicId });
-      }
+      setState({ status: "confirm", selection, grant });
     }
 
     void run();
   }, [router]);
 
+  async function confirmBooking(selection: PendingSelection, grant: StoredGrant) {
+    setState({ status: "holding", selection });
+    const result = await holdSlot(selection, grant);
+    switch (result.kind) {
+      case "held":
+        router.replace(`/bookings/${result.bookingId}`);
+        return;
+      case "slot-taken":
+        setState({ status: "slot-taken", psychologistPublicId: grant.psychologistPublicId });
+        return;
+      case "verification-invalid":
+        setState({ status: "invalid-link", psychologistPublicId: grant.psychologistPublicId });
+        return;
+      case "no-access":
+        setState({ status: "no-access" });
+        return;
+      default:
+        // The selection keeps its Idempotency-Key, so confirming again replays the same request.
+        setState({ status: "confirm", selection, grant });
+        setRetryFailed(true);
+    }
+  }
+
   return (
     <BookingPageShell>
       <Card className="mx-auto flex max-w-xl flex-col items-center gap-4 p-8 text-center">
-        <VerifyContent state={state} />
+        <VerifyContent state={state} retryFailed={retryFailed} onConfirm={confirmBooking} />
       </Card>
     </BookingPageShell>
   );
 }
 
-function backToPsychologist(publicId: string | null, label: string) {
+function backToPsychologist(publicId: string | null, label: string, variant?: "ghost") {
   if (!publicId) return null;
-  return <Button href={`/p/${encodeURIComponent(publicId)}`}>{label}</Button>;
+  return (
+    <Button href={`/p/${encodeURIComponent(publicId)}`} variant={variant}>
+      {label}
+    </Button>
+  );
 }
 
-function VerifyContent({ state }: { state: VerifyState }) {
+function SlotSummary({ selection }: { selection: PendingSelection }) {
+  return (
+    <div className="w-full rounded-xl bg-mint-50 px-4 py-4 text-[15px]">
+      <p className="text-[13px] font-bold text-muted">{selection.psychologistName}</p>
+      <p className="mt-1 font-bold first-letter:uppercase">
+        {formatSlot(selection.startsAt, selection.endsAt, selection.timeZone)}
+      </p>
+      <p className="text-muted">{formatPrice(selection.priceMinor, selection.currency)}</p>
+    </div>
+  );
+}
+
+function VerifyContent({
+  state,
+  retryFailed,
+  onConfirm,
+}: {
+  state: VerifyState;
+  retryFailed: boolean;
+  onConfirm: (selection: PendingSelection, grant: StoredGrant) => void;
+}) {
   switch (state.status) {
     case "working":
       return (
         <>
           <h1 className="text-3xl">Підтверджуємо пошту…</h1>
-          <p className="text-muted">Зачекайте кілька секунд, ми бронюємо обраний час.</p>
+          <p className="text-muted">Зачекайте кілька секунд.</p>
+        </>
+      );
+    case "confirm":
+      return (
+        <>
+          <h1 className="text-3xl">Пошту підтверджено</h1>
+          <p className="text-muted">Перевірте час і підтвердьте бронювання.</p>
+          <SlotSummary selection={state.selection} />
+          {retryFailed && (
+            <p role="alert" className="text-danger-700">
+              Не вдалося забронювати час. Перевірте з’єднання з інтернетом і спробуйте ще раз.
+            </p>
+          )}
+          <Button fullWidth onClick={() => onConfirm(state.selection, state.grant)}>
+            Підтвердити бронювання
+          </Button>
+          {backToPsychologist(state.grant.psychologistPublicId, "Обрати інший час", "ghost")}
+        </>
+      );
+    case "holding":
+      return (
+        <>
+          <h1 className="text-3xl">Бронюємо час…</h1>
+          <SlotSummary selection={state.selection} />
         </>
       );
     case "invalid-link":

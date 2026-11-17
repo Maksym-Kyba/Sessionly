@@ -8,7 +8,8 @@
  * - The one-time booking verification grant stays in `sessionStorage` for the current tab only, so
  *   the client can choose another slot if the selected one was taken meanwhile.
  * - The client access token of each booking is kept in `localStorage` so that the client can return
- *   to the booking page from the same browser.
+ *   to the booking page from the same browser. It is also kept in memory, so that the redirect to
+ *   the booking page works in the same tab even when storage is unavailable.
  *
  * Every access is wrapped in try/catch because storage may be unavailable (private mode, blocked
  * site data); the flow then degrades gracefully instead of failing.
@@ -61,11 +62,14 @@ function read<T>(storage: () => Storage, key: string): T | null {
   }
 }
 
-function write(storage: () => Storage, key: string, value: unknown): void {
+/** Returns `false` when storage is unavailable and the value was not persisted. */
+function write(storage: () => Storage, key: string, value: unknown): boolean {
   try {
     storage().setItem(key, JSON.stringify(value));
+    return true;
   } catch {
     // Storage is unavailable; the flow continues without persistence.
+    return false;
   }
 }
 
@@ -118,15 +122,32 @@ export function clearGrant(): void {
   remove(session, GRANT_KEY);
 }
 
-export function saveBookingAccess(bookingId: string, access: StoredBookingAccess): void {
-  write(local, BOOKING_ACCESS_PREFIX + bookingId, access);
+/**
+ * Booking access kept for the lifetime of this tab's JavaScript, which survives client-side
+ * navigation but not a page reload. `persisted` records whether `localStorage` also holds it.
+ */
+const memoryAccess = new Map<string, { access: StoredBookingAccess; persisted: boolean }>();
+
+/** Stores booking access; returns `false` when it could only be kept in memory for this tab. */
+export function saveBookingAccess(bookingId: string, access: StoredBookingAccess): boolean {
+  const persisted = write(local, BOOKING_ACCESS_PREFIX + bookingId, access);
+  memoryAccess.set(bookingId, { access, persisted });
+  return persisted;
+}
+
+/** `true` when this tab holds the booking access only in memory, so a reload would lose it. */
+export function isBookingAccessMemoryOnly(bookingId: string): boolean {
+  return memoryAccess.get(bookingId)?.persisted === false;
 }
 
 export function loadBookingAccess(bookingId: string): StoredBookingAccess | null {
-  const access = read<StoredBookingAccess>(local, BOOKING_ACCESS_PREFIX + bookingId);
+  const access =
+    memoryAccess.get(bookingId)?.access ??
+    read<StoredBookingAccess>(local, BOOKING_ACCESS_PREFIX + bookingId);
   if (!access) return null;
   if (access.expiresAt && new Date(access.expiresAt).getTime() <= Date.now()) {
     remove(local, BOOKING_ACCESS_PREFIX + bookingId);
+    memoryAccess.delete(bookingId);
     return null;
   }
   return access;

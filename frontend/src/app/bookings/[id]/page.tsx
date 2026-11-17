@@ -16,6 +16,7 @@ import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import {
+  isBookingAccessMemoryOnly,
   loadBookingAccess,
   newIdempotencyKey,
   type StoredBookingAccess,
@@ -202,6 +203,13 @@ export default function BookingStatusPage() {
             </div>
           </div>
         </dl>
+
+        {isBookingAccessMemoryOnly(booking.id) && displayStatus !== "EXPIRED" && (
+          <Notice tone="warning">
+            Ваш браузер не дозволяє зберегти доступ до бронювання. Не оновлюйте й не закривайте цю
+            сторінку, доки не завершите оплату.
+          </Notice>
+        )}
 
         {displayStatus === "HELD" && payment.status !== "manual-review" && (
           <>

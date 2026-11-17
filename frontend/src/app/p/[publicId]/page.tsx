@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { errorStatus } from "@/api/errors";
 import {
@@ -78,6 +78,9 @@ export default function PsychologistPublicPage() {
   const [sent, setSent] = useState(false);
   const [booking, setBooking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // One Idempotency-Key per selected slot, reused across retries so that a booking created before
+  // a lost response is replayed instead of failing. A new key is made only for a different slot.
+  const attemptKey = useRef<{ slotId: string; key: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -168,6 +171,13 @@ export default function PsychologistPublicPage() {
   const { psychologist, timeZone } = state;
   const clientTimeZone = browserTimeZone();
 
+  function keyForSlot(slotId: string): string {
+    if (attemptKey.current?.slotId !== slotId) {
+      attemptKey.current = { slotId, key: newIdempotencyKey() };
+    }
+    return attemptKey.current.key;
+  }
+
   const selectionFor = (slot: AvailabilitySlot) => ({
     psychologistPublicId: psychologist.public_id,
     psychologistName: psychologist.display_name,
@@ -177,7 +187,7 @@ export default function PsychologistPublicPage() {
     endsAt: slot.ends_at,
     priceMinor: slot.price_minor,
     currency: slot.currency,
-    idempotencyKey: newIdempotencyKey(),
+    idempotencyKey: keyForSlot(slot.id),
   });
 
   async function handleRequestEmail(event: FormEvent<HTMLFormElement>) {
@@ -201,6 +211,8 @@ export default function PsychologistPublicPage() {
     setBooking(true);
     setError(null);
     const result = await holdSlot(selectionFor(selectedSlot), grant);
+    // Keep the key only when the outcome is unknown (network error), so that a retry replays it.
+    if (result.kind !== "error") attemptKey.current = null;
     switch (result.kind) {
       case "held":
         router.push(`/bookings/${result.bookingId}`);
