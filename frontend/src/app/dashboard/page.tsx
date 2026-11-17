@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 
 import { signOut } from "@/api/auth";
 import { BookingsCard } from "@/components/dashboard/BookingsCard";
+import { ProfileCard } from "@/components/dashboard/ProfileCard";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -19,7 +20,6 @@ const sections: DashboardSection[] = [
     description: "Робочі години, тривалість і вартість сесії.",
     href: "/dashboard/availability",
   },
-  { title: "Профіль", description: "Ім'я, часовий пояс і посилання для клієнтів." },
 ];
 
 /** Psychologist dashboard: bookings, links to settings pages and sign-out. */
@@ -113,6 +113,7 @@ export default function DashboardPage() {
                   )}
                 </Card>
               ))}
+              <ProfileCard psychologist={state.psychologist} />
             </div>
           </>
         )}

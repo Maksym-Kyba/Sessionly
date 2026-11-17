@@ -39,3 +39,41 @@ export async function signOut(csrfToken: string): Promise<void> {
     throw new Error(`Unexpected response from /auth/logout: ${response.status}`);
   }
 }
+
+/** Fields of `PATCH /api/v1/accounts/me`. Omitted fields stay unchanged. */
+export type ProfileUpdate = {
+  display_name?: string;
+  /** IANA time zone, for example `Europe/Kyiv`. */
+  time_zone?: string;
+};
+
+/** Raised when the profile update is rejected; carries the HTTP status. */
+export class ProfileUpdateError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(`Unexpected response from PATCH /accounts/me: ${status}`);
+    this.name = "ProfileUpdateError";
+    this.status = status;
+  }
+}
+
+/**
+ * Updates the signed-in psychologist's display name and/or time zone and returns the updated
+ * account, including a fresh CSRF token. Changing the time zone also recalculates future slots.
+ */
+export async function updateProfile(
+  csrfToken: string,
+  update: ProfileUpdate,
+): Promise<CurrentPsychologist> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/accounts/me`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+    body: JSON.stringify(update),
+  });
+  if (!response.ok) {
+    throw new ProfileUpdateError(response.status);
+  }
+  return (await response.json()) as CurrentPsychologist;
+}
