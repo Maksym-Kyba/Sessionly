@@ -17,6 +17,9 @@ from app.availability.models import AvailabilitySlot
 from app.booking.models import Booking, BookingStatus
 from app.core.config import settings
 from app.main import app
+from app.payments import booking_adapter
+from app.payments import router as payments_router
+from app.payments.api import MockPaymentGateway
 from app.payments.models import Payment
 
 
@@ -200,6 +203,52 @@ async def test_second_payment_with_new_key_cannot_confirm_again(
     assert second.status_code == 409
     assert second.json()["detail"] == "Booking is not available for payment"
     assert payment_count(database_engine) == 1
+
+
+@pytest.mark.anyio
+async def test_new_key_after_unconfirmed_charge_returns_409_without_charging(
+    api_client, database_engine, paid_booking_setup, monkeypatch
+):
+    booking_id, token = paid_booking_setup
+    charges = []
+
+    class CountingGateway:
+        provider_name = "mock"
+
+        def __init__(self, outcome):
+            self.gateway = MockPaymentGateway(outcome)
+
+        def process_payment(self, request):
+            charges.append(request.idempotency_key)
+            return self.gateway.process_payment(request)
+
+    def broken_confirmation(session, booking_id, payment_reference):
+        raise RuntimeError("booking unavailable")
+
+    monkeypatch.setattr(payments_router, "shared_mock_gateway", CountingGateway)
+    monkeypatch.setattr(booking_adapter, "confirm_booking", broken_confirmation)
+    first_key = _key()
+    first = await api_client.post(
+        mock_path(booking_id), json={"result": "success"}, headers=headers_for(token, first_key)
+    )
+
+    second = await api_client.post(
+        mock_path(booking_id), json={"result": "success"}, headers=headers_for(token, _key())
+    )
+    replay = await api_client.post(
+        mock_path(booking_id), json={"result": "success"}, headers=headers_for(token, first_key)
+    )
+
+    assert first.status_code == 201
+    assert first.json()["payment_status"] == "manual_review"
+    assert second.status_code == 409
+    assert second.json()["detail"] == "A previous payment for this booking requires manual review"
+    assert replay.status_code == 200
+    assert replay.json()["payment_status"] == "manual_review"
+    assert replay.json()["idempotent_replay"] is True
+    assert len(charges) == 1
+    assert payment_count(database_engine) == 1
+    assert booking_status(database_engine, booking_id) == BookingStatus.HELD
 
 
 # Client authorization

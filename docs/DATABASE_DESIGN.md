@@ -169,6 +169,11 @@ Constraints:
 
 No client email, credentials, card data or provider payloads are stored.
 
+**Downgrade warning.** Downgrading below migration `20261118_0006` drops the `payments` table and
+permanently deletes payment history, including `manual_review` records that may be needed to
+decide manual refunds. Do not run `alembic downgrade` past this revision in production except as
+a deliberate, approved operation after a database backup.
+
 **PROPOSED `payment_events`** (not implemented): `id`, `payment_id`, `provider`, nullable
 `provider_event_id`, `event_type`, a received timestamp and minimal redacted metadata, with unique
 `(provider, provider_event_id)` for webhook idempotency once an external provider exists.
@@ -204,7 +209,9 @@ Implemented statuses:
 - `manual_review` — the charge succeeded but booking returned `EXPIRED` or `NOT_CONFIRMABLE`, or
   booking confirmation raised an error. The booking is never confirmed automatically; an expired
   booking stays `expired`. Mapping both `EXPIRED` and `NOT_CONFIRMABLE` to manual review has been
-  agreed with the booking module owner.
+  agreed with the booking module owner. While a booking has a `manual_review` payment, no new
+  payment attempt with another idempotency key is accepted for it. The status is never cleared
+  automatically; a resolution workflow is not implemented.
 
 **PROPOSED** statuses (not implemented): `refund_pending` (a manual refund has been decided and is
 processed out of band) and `refunded` (manual refund completion recorded).
@@ -217,7 +224,8 @@ Sessionly's verified receipt time are unresolved and require team approval.
 
 1. *Claim:* take a payments-owned PostgreSQL advisory lock for the booking, verify the client
    access token through `booking.api.get_client_booking`, then either find the attempt recorded
-   for the idempotency key or read the payable snapshot through `booking.api.get_payable_booking`
+   for the idempotency key or, for a new key, refuse the attempt if the booking has a
+   `manual_review` payment, read the payable snapshot through `booking.api.get_payable_booking`
    and insert a `pending` row. This transaction commits before any charge.
 2. *Process:* take the same advisory lock and lock the payment row, call the gateway with the
    payment ID as the gateway idempotency key, store the provider reference, and call
@@ -226,8 +234,15 @@ Sessionly's verified receipt time are unresolved and require team approval.
    recorded as `manual_review`.
 
 The lock order is the payments advisory lock, then the payment row, then booking's own locks
-(psychologist, then booking). **PROPOSED:** the advisory-lock approach and the foreign key from
-`payments.booking_id` to `bookings.id` require review by the booking module owner.
+(psychologist, then booking). The foreign key from `payments.booking_id` to `bookings.id` with
+`ON DELETE RESTRICT` was approved in the PR #21 review. The advisory-lock approach was approved
+for the mock gateway only; a real payment provider requires reviewing this transaction model,
+because the charge currently runs while the lock is held.
+
+The `manual_review` check in the claim step is race-safe because `manual_review` is written only
+by the process step while it holds the same advisory lock. A concurrent attempt therefore either
+waits for that lock and then sees the committed `manual_review` row, or reaches the claim while
+the attempt is still `pending` and is rejected by the one-pending-per-booking index.
 
 **Recovery limitation.** If the process stops after the claim commits, the attempt remains
 `pending` and blocks other attempts for that booking. A retry with the same idempotency key resumes

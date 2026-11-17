@@ -69,6 +69,11 @@ def create_mock_payment(
             status_code=status.HTTP_409_CONFLICT,
             detail="Another payment for this booking is still being processed",
         ) from exc
+    except service.PaymentRequiresManualReview as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A previous payment for this booking requires manual review",
+        ) from exc
     except service.BookingNotPayable as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Booking is not available for payment"

@@ -23,6 +23,18 @@ def get_by_idempotency_key_hash(session: Session, key_hash: str) -> Payment | No
     return session.scalar(select(Payment).where(Payment.idempotency_key_hash == key_hash))
 
 
+def has_manual_review_payment(session: Session, booking_id: UUID) -> bool:
+    """Return whether any payment for the booking is recorded for manual review."""
+    return (
+        session.scalar(
+            select(Payment.id)
+            .where(Payment.booking_id == booking_id, Payment.status == "manual_review")
+            .limit(1)
+        )
+        is not None
+    )
+
+
 def insert_pending(
     session: Session,
     *,

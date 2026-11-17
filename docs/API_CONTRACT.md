@@ -228,8 +228,9 @@ Whether slot duration, currency and price are represented this way is **PROPOSED
 
 **Phase A status:** the database model, internal Booking Module API, 15-minute hold and exclusion
 constraint are implemented. **Phase B status:** client email verification, public hold creation,
-access-token retrieval and booking reads are implemented as described below. Payment processing
-remains outside this phase.
+access-token retrieval and booking reads are implemented as described below. Booking does not
+process payments; the development-only mock payment route is provided by the Payments Module
+(see [Payments](#payments)).
 
 The internal `booking.api.create_hold(session, slot_id)` creates a `HELD` reservation with the
 selected slot's appointment interval, duration, price, and currency copied as immutable booking
@@ -258,10 +259,11 @@ gets the full 15 minutes from its own database creation timestamp.
 The first successful response is `201 Created` and includes the immutable appointment snapshot,
 `HELD` status, `hold_expires_at`, and an opaque `client_access_token`. The access token is returned
 only in this response; only its hash is stored. The response uses `Cache-Control: no-store` and
-contains no client email. Payment is not implemented in Phase B; the response's
-`payment_stage: "awaiting_payment_integration"` indicates that a verified client can proceed to the
-payment stage once the Payments Module is integrated. No public payment or confirmation route is
-provided here.
+contains no client email. The response still returns
+`payment_stage: "awaiting_payment_integration"`, introduced before the Payments Module existed.
+Aligning this field with the mock payment route is pending a decision by the Booking Module owner
+(PR #21 review); until then clients should rely on `status` and the payment response. The Booking
+Module itself provides no public payment or confirmation route.
 
 Replaying the same idempotency key and slot returns `200 OK` with the same booking and original
 deadline and `idempotent_replay: true`. If the replay uses the same still-valid consumed grant, the
@@ -289,7 +291,7 @@ overlap, `409` for an idempotency-key mismatch, and `400` for an invalid or expi
 grant. Verification-link consumption and recovery reject invalid, expired, consumed, or
 out-of-scope tokens with a generic `400`. Public booking and credential responses are not cached.
 
-The internal payment integration API is also defined without implementing payments:
+The internal payment integration API, used by the Payments Module:
 
 - `booking.api.get_payable_booking(session, booking_id)` returns the amount, currency, and deadline
   only while the booking is still payable; values come from the booking snapshot.
@@ -383,8 +385,10 @@ not been approved by the team.
 **Availability.** The route is active when `MOCK_PAYMENTS_ENABLED` is `true`, or when it is unset
 and `APP_ENV=development`. Otherwise every request, including an unauthenticated one, returns
 `404`. The route is excluded from the published OpenAPI document because it is not part of the
-public API. **PROPOSED:** whether the deployed demonstration (`APP_ENV=production`) sets
-`MOCK_PAYMENTS_ENABLED=true` requires team approval.
+public API (agreed for the MVP in the PR #21 review). The deployed demonstration
+(`APP_ENV=production`) may set `MOCK_PAYMENTS_ENABLED=true` only for a controlled demonstration
+and must set it back to `false` afterwards: while it is enabled, any client holding a booking
+token can confirm that booking without paying.
 
 **Authorization.** The client presents the booking's client access token, using the same
 convention as `GET /api/v1/bookings/{booking_id}`:
@@ -447,6 +451,7 @@ answer. A payment confirmed after the hold expired returns `"payment_status": "m
 | `404` | `Not Found` | Mock payments are disabled |
 | `409` | `Idempotency key was already used for a different request` | Same key, different booking or result |
 | `409` | `Another payment for this booking is still being processed` | A pending attempt exists for the booking |
+| `409` | `A previous payment for this booking requires manual review` | A new key is used while a payment for the booking awaits manual review |
 | `409` | `Booking is not available for payment` | Booking expired, already confirmed or otherwise not payable |
 | `422` | `Booking cannot be paid` | Booking amount is not payable through the gateway (for example, `0`) |
 | `422` | validation details | Invalid body or `Idempotency-Key` header |
@@ -455,6 +460,16 @@ answer. A payment confirmed after the hold expired returns `"payment_status": "m
 without charging again. If an earlier attempt with that key was interrupted before it finished, the
 retry resumes that attempt. A different key for a booking that is already confirmed is rejected
 before any charge.
+
+**Manual review blocks further charges.** Once any payment for a booking is recorded as
+`manual_review`, every new attempt for that booking (a new idempotency key) is rejected with
+`409` before the gateway is called, even if the booking is still `HELD`. This prevents a second
+charge when a successful charge could not be confirmed, for example because booking confirmation
+failed or timed out. Repeating the original request with the original key still returns the
+recorded `manual_review` payment with `200`. The check runs under the same per-booking lock that
+records `manual_review`, so concurrent attempts cannot pass it. Manual review is never cleared
+automatically and no refund is issued automatically; no resolution workflow is implemented yet.
+A client who still wants an appointment books it again, which creates a new booking.
 
 ### Future endpoints (**PROPOSED**)
 

@@ -68,6 +68,14 @@ class PaymentInProgress(Exception):
     """Another payment attempt for the same booking is still pending."""
 
 
+class PaymentRequiresManualReview(Exception):
+    """A previous payment for the booking awaits manual review, so no new attempt may charge.
+
+    A successful charge that booking did not confirm is recorded as `manual_review`. Until that
+    payment is resolved manually, accepting another attempt could charge the client twice.
+    """
+
+
 class BookingAccessDenied(Exception):
     """The client access token does not grant access to the booking, or the booking is unknown."""
 
@@ -205,6 +213,11 @@ def _claim(
     Returns the payment ID and whether the key had already been used. The pending row is committed
     before any charge, so an interrupted attempt always leaves a record behind. When a client
     access token is given, booking verifies it first, before any replay or new attempt.
+
+    A new attempt is refused while any payment for the booking awaits manual review. The check
+    runs under the booking's payment lock, which `_process` also holds when it records
+    `manual_review`, so a concurrent attempt either sees the committed review state or is
+    already blocked as in progress by the pending row. Replays of a known key are unaffected.
     """
     with session.begin():
         repository.lock_booking_payments(session, booking_id)
@@ -214,6 +227,10 @@ def _claim(
             raise BookingAccessDenied("Booking not found")
         existing = repository.get_by_idempotency_key_hash(session, key_hash)
         if existing is None:
+            if repository.has_manual_review_payment(session, booking_id):
+                raise PaymentRequiresManualReview(
+                    "A previous payment for this booking awaits manual review"
+                )
             payable = booking_adapter.payable_booking(session, booking_id)
             if payable is None:
                 raise BookingNotPayable("Booking is not payable")

@@ -3,14 +3,14 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Barrier, Lock
+from threading import Barrier, Event, Lock
 from uuid import uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import func, inspect, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, inspect, select, text, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.availability.models import AvailabilitySlot
@@ -27,6 +27,7 @@ from app.payments.api import (
     PaymentInProgress,
     PaymentOutcome,
     PaymentRequest,
+    PaymentRequiresManualReview,
     PaymentResult,
     PaymentStatus,
     pay_booking,
@@ -555,6 +556,91 @@ def test_booking_confirmation_error_keeps_successful_charge_for_manual_review(
     assert booking_record(database_engine, booking_id).status == BookingStatus.HELD
 
 
+def test_unconfirmed_successful_charge_blocks_new_attempts_with_other_keys(
+    database_engine, psychologist, monkeypatch
+):
+    booking_id = create_held_booking(database_engine, psychologist.id)
+
+    def broken_confirmation(session, booking_id, payment_reference):
+        raise RuntimeError("booking unavailable")
+
+    monkeypatch.setattr(booking_adapter, "confirm_booking", broken_confirmation)
+    first_gateway = succeeding()
+    first = pay(database_engine, booking_id, "key-review-block-0001", first_gateway)
+    assert first.status is PaymentStatus.MANUAL_REVIEW
+    assert booking_record(database_engine, booking_id).status == BookingStatus.HELD
+
+    other_gateway = succeeding()
+    with pytest.raises(PaymentRequiresManualReview):
+        pay(database_engine, booking_id, "key-review-block-0002", other_gateway)
+    assert other_gateway.calls == []
+
+    replay_gateway = succeeding()
+    replay = pay(database_engine, booking_id, "key-review-block-0001", replay_gateway)
+    assert replay.payment_id == first.payment_id
+    assert replay.status is PaymentStatus.MANUAL_REVIEW
+    assert replay.idempotent_replay is True
+    assert replay_gateway.calls == []
+
+    assert len(first_gateway.calls) == 1
+    rows = payment_rows(database_engine, booking_id)
+    assert [(row.status, row.provider_reference) for row in rows] == [
+        ("manual_review", first.provider_reference)
+    ]
+    assert booking_record(database_engine, booking_id).status == BookingStatus.HELD
+
+
+def test_booking_confirmation_timeout_keeps_successful_charge_for_manual_review(
+    database_engine, psychologist, monkeypatch
+):
+    booking_id = create_held_booking(database_engine, psychologist.id)
+    real_confirmation = booking_adapter.confirm_booking
+
+    def confirmation_with_short_lock_timeout(session, booking_id, payment_reference):
+        # SET LOCAL runs inside the settlement savepoint and is undone when it rolls back.
+        session.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        return real_confirmation(session, booking_id, payment_reference)
+
+    monkeypatch.setattr(booking_adapter, "confirm_booking", confirmation_with_short_lock_timeout)
+    gateway = succeeding()
+
+    with Session(database_engine) as blocker, blocker.begin():
+        # Another transaction holds the booking row, so booking's confirmation times out. FOR NO
+        # KEY UPDATE still lets the payment insert take its foreign-key share lock.
+        blocker.execute(
+            select(Booking).where(Booking.id == booking_id).with_for_update(key_share=True)
+        )
+        payment = pay(database_engine, booking_id, "key-timeout-0001", gateway)
+
+    assert len(gateway.calls) == 1
+    assert payment.status is PaymentStatus.MANUAL_REVIEW
+    assert payment.booking_decision is None
+    assert payment.provider_reference is not None
+    [row] = payment_rows(database_engine, booking_id)
+    assert (row.status, row.provider_reference) == ("manual_review", payment.provider_reference)
+    booking = booking_record(database_engine, booking_id)
+    assert booking.status == BookingStatus.HELD
+    assert booking.payment_reference is None
+
+    other_gateway = succeeding()
+    with pytest.raises(PaymentRequiresManualReview):
+        pay(database_engine, booking_id, "key-timeout-0002", other_gateway)
+    assert other_gateway.calls == []
+
+
+def test_simulated_confirmation_timeout_is_a_real_postgresql_error(database_engine, psychologist):
+    """Guard for the test above: the lock timeout it relies on raises OperationalError."""
+    booking_id = create_held_booking(database_engine, psychologist.id)
+    with Session(database_engine) as blocker, blocker.begin():
+        blocker.execute(
+            select(Booking).where(Booking.id == booking_id).with_for_update(key_share=True)
+        )
+        with Session(database_engine) as session, session.begin():
+            session.execute(text("SET LOCAL lock_timeout = '200ms'"))
+            with pytest.raises(OperationalError):
+                session.execute(select(Booking).where(Booking.id == booking_id).with_for_update())
+
+
 def test_pay_booking_refuses_a_caller_transaction(database_engine, psychologist):
     booking_id = create_held_booking(database_engine, psychologist.id)
 
@@ -613,3 +699,82 @@ def test_concurrent_requests_with_different_keys_confirm_once(database_engine, p
     assert booking_record(database_engine, booking_id).payment_reference == (
         succeeded[0].provider_reference
     )
+
+
+def _waiting_advisory_locks(database_engine) -> int:
+    with database_engine.connect() as connection:
+        return connection.scalar(
+            text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted")
+        )
+
+
+def test_attempt_arriving_during_failed_confirmation_is_blocked_without_charging(
+    database_engine, psychologist, monkeypatch
+):
+    booking_id = create_held_booking(database_engine, psychologist.id)
+    second_waiting = Event()
+
+    def slow_broken_confirmation(session, booking_id, payment_reference):
+        # Keep the booking's payment lock until the second attempt is queued behind it.
+        deadline = datetime.now(UTC) + timedelta(seconds=BARRIER_TIMEOUT_SECONDS)
+        while _waiting_advisory_locks(database_engine) == 0:
+            assert datetime.now(UTC) < deadline, "second attempt never waited for the lock"
+        second_waiting.set()
+        raise RuntimeError("booking unavailable")
+
+    monkeypatch.setattr(booking_adapter, "confirm_booking", slow_broken_confirmation)
+    first_charged = Event()
+    first_gateway = RecordingGateway(
+        MockPaymentGateway(PaymentOutcome.SUCCEEDED),
+        before_return=lambda result: first_charged.set(),
+    )
+    second_gateway = succeeding()
+
+    def second_attempt():
+        assert first_charged.wait(timeout=BARRIER_TIMEOUT_SECONDS)
+        try:
+            return pay(database_engine, booking_id, "key-race-review-0002", second_gateway)
+        except (PaymentRequiresManualReview, PaymentInProgress) as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        second_future = executor.submit(second_attempt)
+        first = pay(database_engine, booking_id, "key-race-review-0001", first_gateway)
+        second = second_future.result(timeout=BARRIER_TIMEOUT_SECONDS)
+
+    assert second_waiting.is_set()
+    assert first.status is PaymentStatus.MANUAL_REVIEW
+    assert isinstance(second, PaymentRequiresManualReview)
+    assert len(first_gateway.calls) == 1
+    assert second_gateway.calls == []
+    assert [row.status for row in payment_rows(database_engine, booking_id)] == ["manual_review"]
+    assert booking_record(database_engine, booking_id).status == BookingStatus.HELD
+
+
+def test_concurrent_attempts_with_failing_confirmation_charge_once(
+    database_engine, psychologist, monkeypatch
+):
+    booking_id = create_held_booking(database_engine, psychologist.id)
+
+    def broken_confirmation(session, booking_id, payment_reference):
+        raise RuntimeError("booking unavailable")
+
+    monkeypatch.setattr(booking_adapter, "confirm_booking", broken_confirmation)
+    gateway = succeeding()
+    barrier = Barrier(4)
+
+    def attempt(index):
+        barrier.wait(timeout=BARRIER_TIMEOUT_SECONDS)
+        try:
+            return pay(database_engine, booking_id, f"key-concurrent-review-{index}", gateway)
+        except (PaymentRequiresManualReview, PaymentInProgress) as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(attempt, range(4)))
+
+    recorded = [result for result in results if not isinstance(result, Exception)]
+    assert [result.status for result in recorded] == [PaymentStatus.MANUAL_REVIEW]
+    assert len(gateway.calls) == 1
+    assert [row.status for row in payment_rows(database_engine, booking_id)] == ["manual_review"]
+    assert booking_record(database_engine, booking_id).status == BookingStatus.HELD
