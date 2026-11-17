@@ -12,16 +12,19 @@ import {
   requestEmailVerification,
 } from "@/api/public";
 import { BookingPageShell, Notice } from "@/components/booking/BookingPageShell";
+import { RecoverAccessForm } from "@/components/booking/RecoverAccessForm";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { TextField } from "@/components/ui/TextField";
 import {
+  clearPendingRecovery,
   loadGrant,
   newIdempotencyKey,
   savePendingSelection,
   type StoredGrant,
 } from "@/utils/clientBookingStorage";
+import { verificationErrorMessage } from "@/utils/verificationErrors";
 import { cn } from "@/utils/cn";
 import { browserTimeZone, dayKey, formatDay, formatPrice, formatSlot, formatTime } from "@/utils/format";
 import { holdSlot } from "@/utils/holdSlot";
@@ -51,19 +54,6 @@ function groupByDay(slots: AvailabilitySlot[], timeZone: string): DayGroup[] {
   return [...groups.values()];
 }
 
-function verificationErrorMessage(status: number | null): string {
-  switch (status) {
-    case 422:
-      return "Перевірте, чи правильно введено адресу електронної пошти.";
-    case 429:
-      return "Забагато запитів. Зачекайте хвилину й спробуйте ще раз.";
-    case 503:
-      return "Надсилання листів тимчасово недоступне. Спробуйте пізніше.";
-    default:
-      return "Не вдалося надіслати лист. Спробуйте ще раз.";
-  }
-}
-
 /** Public booking page of one psychologist. */
 export default function PsychologistPublicPage() {
   const { publicId } = useParams<{ publicId: string }>();
@@ -78,6 +68,8 @@ export default function PsychologistPublicPage() {
   const [sent, setSent] = useState(false);
   const [booking, setBooking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when a booking exists but this browser received no access token for it.
+  const [needsRecovery, setNeedsRecovery] = useState(false);
   // One Idempotency-Key per selected slot, reused across retries so that a booking created before
   // a lost response is replayed instead of failing. A new key is made only for a different slot.
   const attemptKey = useRef<{ slotId: string; key: string } | null>(null);
@@ -195,6 +187,8 @@ export default function PsychologistPublicPage() {
     if (!selectedSlot || sending) return;
     setSending(true);
     setError(null);
+    // A new slot request replaces any unfinished access recovery from an earlier booking.
+    clearPendingRecovery();
     savePendingSelection(selectionFor(selectedSlot));
     try {
       await requestEmailVerification(email.trim(), psychologist.public_id);
@@ -227,7 +221,8 @@ export default function PsychologistPublicPage() {
         setError("Підтвердження пошти більше не дійсне. Введіть email, щоб отримати нове посилання.");
         break;
       case "no-access":
-        setError("Бронювання вже створено. Відкрийте його з того самого браузера, у якому бронювали.");
+        setGrant(null);
+        setNeedsRecovery(true);
         break;
       default:
         setError("Не вдалося забронювати час. Спробуйте ще раз.");
@@ -353,6 +348,15 @@ export default function PsychologistPublicPage() {
             </>
           )}
           {error && <Notice tone="danger">{error}</Notice>}
+          {needsRecovery && (
+            <div className="flex flex-col gap-3">
+              <Notice tone="warning">
+                Ваше бронювання створено, але цей браузер не отримав доступу до нього. Підтвердіть
+                пошту ще раз, щоб відкрити бронювання й оплатити його.
+              </Notice>
+              <RecoverAccessForm psychologistPublicId={psychologist.public_id} />
+            </div>
+          )}
           <p className="text-[13px] text-muted">
             Скасування чи перенесення консультації узгоджуйте напряму з психологом.
           </p>

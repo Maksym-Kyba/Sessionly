@@ -18,6 +18,7 @@
 const PENDING_SELECTION_KEY = "sessionly.pendingSelection";
 const GRANT_KEY = "sessionly.verificationGrant";
 const BOOKING_ACCESS_PREFIX = "sessionly.bookingAccess.";
+const PENDING_RECOVERY_KEY = "sessionly.pendingRecovery";
 
 /** Matches the one-hour upper bound for keeping a slot selection while the client checks email. */
 const PENDING_SELECTION_TTL_MS = 60 * 60 * 1000;
@@ -151,6 +152,38 @@ export function loadBookingAccess(bookingId: string): StoredBookingAccess | null
     return null;
   }
   return access;
+}
+
+/**
+ * A booking that was created but whose access token never reached this browser (for example, the
+ * response was lost and the retry replayed the booking without a token). The client verifies the
+ * email again, and the verification page then recovers access with the fresh grant.
+ */
+export type PendingRecovery = {
+  bookingId: string;
+  psychologistPublicId: string;
+  psychologistName: string;
+  timeZone: string;
+  savedAt: number;
+};
+
+export function savePendingRecovery(recovery: Omit<PendingRecovery, "savedAt">): void {
+  write(local, PENDING_RECOVERY_KEY, { ...recovery, savedAt: Date.now() });
+}
+
+/** Returns the pending recovery, discarding it when it is older than one hour. */
+export function loadPendingRecovery(): PendingRecovery | null {
+  const recovery = read<PendingRecovery>(local, PENDING_RECOVERY_KEY);
+  if (!recovery) return null;
+  if (Date.now() - recovery.savedAt > PENDING_SELECTION_TTL_MS) {
+    remove(local, PENDING_RECOVERY_KEY);
+    return null;
+  }
+  return recovery;
+}
+
+export function clearPendingRecovery(): void {
+  remove(local, PENDING_RECOVERY_KEY);
 }
 
 /** Generates an `Idempotency-Key` value of 32 hexadecimal characters. */

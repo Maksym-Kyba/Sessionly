@@ -5,6 +5,7 @@ import {
   clearPendingSelection,
   type PendingSelection,
   saveBookingAccess,
+  savePendingRecovery,
   type StoredGrant,
 } from "@/utils/clientBookingStorage";
 
@@ -15,7 +16,10 @@ export type HoldSlotResult =
   | { kind: "slot-taken" }
   /** The grant is invalid, expired or already used; the client must verify the email again. */
   | { kind: "verification-invalid" }
-  /** The booking was created earlier but no access token was returned for this browser. */
+  /**
+   * The booking was created earlier but no access token was returned for this browser. It is saved
+   * as a pending recovery; the client verifies the email again to recover access.
+   */
   | { kind: "no-access"; bookingId: string }
   | { kind: "error" };
 
@@ -31,6 +35,12 @@ export async function holdSlot(selection: SlotSelection, grant: StoredGrant): Pr
     clearPendingSelection();
     clearGrant();
     if (!booking.client_access_token) {
+      savePendingRecovery({
+        bookingId: booking.id,
+        psychologistPublicId: selection.psychologistPublicId,
+        psychologistName: selection.psychologistName,
+        timeZone: selection.timeZone,
+      });
       return { kind: "no-access", bookingId: booking.id };
     }
     saveBookingAccess(booking.id, {

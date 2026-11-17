@@ -3,15 +3,24 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { recoverBookingAccessToken } from "@/api/booking";
 import { errorStatus } from "@/api/errors";
-import { consumeEmailVerification } from "@/api/public";
-import { BookingPageShell } from "@/components/booking/BookingPageShell";
+import { consumeEmailVerification, getPublicAvailability } from "@/api/public";
+import { BookingPageShell, Notice } from "@/components/booking/BookingPageShell";
+import { RecoverAccessForm } from "@/components/booking/RecoverAccessForm";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import {
+  clearGrant,
+  clearPendingRecovery,
+  clearPendingSelection,
+  loadPendingRecovery,
   loadPendingSelection,
+  type PendingRecovery,
   type PendingSelection,
+  saveBookingAccess,
   saveGrant,
+  savePendingSelection,
   type StoredGrant,
 } from "@/utils/clientBookingStorage";
 import { formatPrice, formatSlot } from "@/utils/format";
@@ -20,13 +29,77 @@ import { holdSlot } from "@/utils/holdSlot";
 type VerifyState =
   | { status: "working" }
   /** Email verified; the client confirms the slot explicitly before it is held. */
-  | { status: "confirm"; selection: PendingSelection; grant: StoredGrant }
+  | {
+      status: "confirm";
+      selection: PendingSelection;
+      grant: StoredGrant;
+      /** The price shown when the slot was selected, if the psychologist has changed it since. */
+      previousPriceMinor: number | null;
+    }
   | { status: "holding"; selection: PendingSelection }
   | { status: "invalid-link"; psychologistPublicId: string | null }
   | { status: "rate-limited" }
   | { status: "slot-taken"; psychologistPublicId: string }
-  | { status: "no-access" }
+  | { status: "no-access"; psychologistPublicId: string }
   | { status: "error"; psychologistPublicId: string | null };
+
+/** Outcome of re-reading the selected slot from the public availability before confirmation. */
+type SlotCheck =
+  | { kind: "available"; selection: PendingSelection; previousPriceMinor: number | null }
+  | { kind: "taken" }
+  /** The check failed (network); the booking page still shows the price the backend applied. */
+  | { kind: "unknown" };
+
+/**
+ * Re-reads the selected slot, so that the confirmation shows the current price and a slot that is
+ * no longer available is reported before the client confirms.
+ */
+async function checkSlot(selection: PendingSelection): Promise<SlotCheck> {
+  try {
+    const from = new Date(new Date(selection.startsAt).getTime() - 60_000);
+    const to = new Date(new Date(selection.endsAt).getTime() + 60_000);
+    const availability = await getPublicAvailability(selection.psychologistPublicId, from, to);
+    const slot = availability.slots.find((item) => item.id === selection.slotId);
+    if (!slot) return { kind: "taken" };
+    const changed = slot.price_minor !== selection.priceMinor || slot.currency !== selection.currency;
+    const updated: PendingSelection = {
+      ...selection,
+      startsAt: slot.starts_at,
+      endsAt: slot.ends_at,
+      priceMinor: slot.price_minor,
+      currency: slot.currency,
+    };
+    if (changed) savePendingSelection(updated);
+    return {
+      kind: "available",
+      selection: updated,
+      previousPriceMinor: changed ? selection.priceMinor : null,
+    };
+  } catch {
+    return { kind: "unknown" };
+  }
+}
+
+/** Uses a fresh grant to replace the access token of a booking this browser never received. */
+async function recoverAccess(recovery: PendingRecovery, grant: StoredGrant): Promise<boolean> {
+  try {
+    const access = await recoverBookingAccessToken(recovery.bookingId, grant.token);
+    saveBookingAccess(recovery.bookingId, {
+      token: access.client_access_token,
+      expiresAt: access.expires_at,
+      psychologistPublicId: recovery.psychologistPublicId,
+      psychologistName: recovery.psychologistName,
+      timeZone: recovery.timeZone,
+    });
+    clearPendingRecovery();
+    clearPendingSelection();
+    // The recovery consumed the grant.
+    clearGrant();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Reads the verification token from the URL fragment and removes it from browser history. */
 function takeTokenFromFragment(): string | null {
@@ -91,13 +164,39 @@ export default function VerifyEmailPage() {
       // Keep the grant for this tab so the client can pick another slot if needed.
       saveGrant(grant);
 
+      // A booking created earlier without a token for this browser: recover access to it first.
+      const recovery = loadPendingRecovery();
+      if (recovery && recovery.psychologistPublicId === grant.psychologistPublicId) {
+        if (await recoverAccess(recovery, grant)) {
+          router.replace(`/bookings/${recovery.bookingId}`);
+        } else {
+          setState({ status: "invalid-link", psychologistPublicId: grant.psychologistPublicId });
+        }
+        return;
+      }
+
       if (!selection || selection.psychologistPublicId !== grant.psychologistPublicId) {
         // The selected slot did not survive (another browser or device): let the client choose again.
         router.replace(`/p/${encodeURIComponent(grant.psychologistPublicId)}`);
         return;
       }
 
-      setState({ status: "confirm", selection, grant });
+      const check = await checkSlot(selection);
+      if (check.kind === "taken") {
+        clearPendingSelection();
+        setState({ status: "slot-taken", psychologistPublicId: grant.psychologistPublicId });
+        return;
+      }
+      setState(
+        check.kind === "available"
+          ? {
+              status: "confirm",
+              selection: check.selection,
+              grant,
+              previousPriceMinor: check.previousPriceMinor,
+            }
+          : { status: "confirm", selection, grant, previousPriceMinor: null },
+      );
     }
 
     void run();
@@ -117,11 +216,11 @@ export default function VerifyEmailPage() {
         setState({ status: "invalid-link", psychologistPublicId: grant.psychologistPublicId });
         return;
       case "no-access":
-        setState({ status: "no-access" });
+        setState({ status: "no-access", psychologistPublicId: grant.psychologistPublicId });
         return;
       default:
         // The selection keeps its Idempotency-Key, so confirming again replays the same request.
-        setState({ status: "confirm", selection, grant });
+        setState({ status: "confirm", selection, grant, previousPriceMinor: null });
         setRetryFailed(true);
     }
   }
@@ -179,6 +278,13 @@ function VerifyContent({
           <h1 className="text-3xl">Пошту підтверджено</h1>
           <p className="text-muted">Перевірте час і підтвердьте бронювання.</p>
           <SlotSummary selection={state.selection} />
+          {state.previousPriceMinor !== null && (
+            <Notice tone="warning">
+              Психолог змінив вартість сесії: раніше було{" "}
+              {formatPrice(state.previousPriceMinor, state.selection.currency)}, тепер{" "}
+              {formatPrice(state.selection.priceMinor, state.selection.currency)}.
+            </Notice>
+          )}
           {retryFailed && (
             <p role="alert" className="text-danger-700">
               Не вдалося забронювати час. Перевірте з’єднання з інтернетом і спробуйте ще раз.
@@ -231,9 +337,10 @@ function VerifyContent({
         <>
           <h1 className="text-3xl">Бронювання вже створено</h1>
           <p className="text-muted">
-            Це бронювання вже було створено раніше. Відкрийте його в тому браузері, у якому ви
-            бронювали час.
+            Ваше бронювання створено, але цей браузер не отримав доступу до нього. Підтвердіть
+            пошту ще раз, щоб відкрити бронювання й оплатити його.
           </p>
+          <RecoverAccessForm psychologistPublicId={state.psychologistPublicId} />
         </>
       );
     case "error":
