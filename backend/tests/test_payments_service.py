@@ -1,6 +1,6 @@
 import dataclasses
 import logging
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -14,6 +14,8 @@ from app.payments.api import (
     PaymentSettlementError,
     PaymentStatus,
     process_booking_payment,
+    shared_mock_gateway,
+    status_for_decision,
 )
 
 BOOKING_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -55,7 +57,9 @@ class StubGateway:
         )
 
 
-def _request(*, amount_minor: int = 120000, idempotency_key: str = "payment-key-1") -> PaymentRequest:
+def _request(
+    *, amount_minor: int = 120000, idempotency_key: str = "payment-key-1"
+) -> PaymentRequest:
     return PaymentRequest(
         booking_id=BOOKING_ID,
         amount_minor=amount_minor,
@@ -204,3 +208,39 @@ def test_settlement_is_immutable():
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         settlement.status = PaymentStatus.FAILED  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_status"),
+    [
+        ("CONFIRMED", PaymentStatus.SUCCEEDED),
+        ("ALREADY_CONFIRMED", PaymentStatus.SUCCEEDED),
+        ("EXPIRED", PaymentStatus.MANUAL_REVIEW),
+        ("NOT_CONFIRMABLE", PaymentStatus.MANUAL_REVIEW),
+    ],
+)
+def test_status_for_decision_accepts_booking_outcome_values(decision, expected_status):
+    assert status_for_decision(decision) is expected_status
+
+
+@pytest.mark.parametrize("decision", ["not_confirmed", "confirmed", None])
+def test_status_for_decision_rejects_unknown_values(decision):
+    with pytest.raises(PaymentSettlementError):
+        status_for_decision(decision)
+
+
+def test_pending_is_never_a_settlement_result():
+    assert PaymentStatus.PENDING not in {
+        status_for_decision(d) for d in BookingConfirmationDecision
+    }
+
+
+def test_shared_mock_gateways_keep_idempotency_across_calls():
+    gateway = shared_mock_gateway(PaymentOutcome.SUCCEEDED)
+    request = _request(idempotency_key=f"shared-{uuid4()}")
+
+    assert shared_mock_gateway("succeeded") is gateway
+    assert shared_mock_gateway(PaymentOutcome.FAILED) is not gateway
+    assert gateway.process_payment(request) == shared_mock_gateway(
+        PaymentOutcome.SUCCEEDED
+    ).process_payment(request)

@@ -144,17 +144,34 @@ and psychologist, then rotates and returns a new access token.
 
 ### `payments` module
 
-**PROPOSED `payments`**
+**Implemented `payments`** (migration `20261118_0006`, Payments Phase 2). One row is one payment
+attempt for a booking.
 
-- `id`, `booking_id`, `amount_minor`, `currency`
-- `mode` (`mock` or future provider), nullable `provider_reference`
-- `status`, `received_at`, `reviewed_at`, `created_at`, `updated_at`
+- `id` (UUID primary key), `booking_id` (foreign key to `bookings.id`, `ON DELETE RESTRICT`)
+- `idempotency_key_hash` — SHA-256 of the client's `Idempotency-Key`; the raw key is not stored
+- `request_hash` — SHA-256 of the booking, provider and simulated result; a reused key with a
+  different request is a conflict
+- `provider` (`mock`), nullable `provider_reference` (set once the gateway answers)
+- `amount_minor`, `currency` — copied from the booking snapshot, never from the client
+- `status` — `pending`, `succeeded`, `failed` or `manual_review`
+- `booking_decision` — nullable booking confirmation outcome (`CONFIRMED`, `ALREADY_CONFIRMED`,
+  `EXPIRED`, `NOT_CONFIRMABLE`), kept so that manual review can see why a payment was not accepted
+- `created_at`, `updated_at` (`timestamptz`, database clock)
 
-**PROPOSED `payment_events`**
+Constraints:
 
-- `id`, `payment_id`, `provider`, nullable `provider_event_id`
-- `event_type`, received timestamp and minimal redacted/auditable metadata
-- Unique `(provider, provider_event_id)` for idempotency where an external provider exists.
+- Unique `idempotency_key_hash` and unique `provider_reference`.
+- Partial unique indexes: at most one `pending` and at most one `succeeded` payment per booking.
+- `amount_minor > 0` and `currency = 'UAH'` (temporary MVP assumptions, matching the gateway).
+- `succeeded` requires a provider reference and a `CONFIRMED` or `ALREADY_CONFIRMED` decision, so a
+  successful charge alone can never be recorded as an accepted booking payment.
+- `manual_review` requires a provider reference; `pending` and `failed` rows carry no decision.
+
+No client email, credentials, card data or provider payloads are stored.
+
+**PROPOSED `payment_events`** (not implemented): `id`, `payment_id`, `provider`, nullable
+`provider_event_id`, `event_type`, a received timestamp and minimal redacted metadata, with unique
+`(provider, provider_event_id)` for webhook idempotency once an external provider exists.
 
 Do not store banking credentials or full sensitive provider payloads without an approved need.
 
@@ -178,17 +195,44 @@ holds or confirmed bookings. It never deletes or changes a confirmed booking.
 
 ### Payment
 
-- `pending` — created, awaiting result.
-- `succeeded` — timely success recorded and accepted by the booking module.
-- `failed` — provider/mock reports failure.
-- `manual_review` — payment confirmation is late or its timing requires review; booking remains
-  unconfirmed and, if expired, stays `expired`.
-- `refund_pending` — a manual refund has been decided and is being processed out of band.
-- `refunded` — manual refund completion recorded.
+Implemented statuses:
+
+- `pending` — recorded and committed before the gateway is called; awaiting the gateway result.
+- `succeeded` — successful charge accepted by booking (`CONFIRMED`, or `ALREADY_CONFIRMED` for the
+  same payment reference).
+- `failed` — the gateway reports failure; booking is not contacted and a held booking stays held.
+- `manual_review` — the charge succeeded but booking returned `EXPIRED` or `NOT_CONFIRMABLE`, or
+  booking confirmation raised an error. The booking is never confirmed automatically; an expired
+  booking stays `expired`. Mapping both `EXPIRED` and `NOT_CONFIRMABLE` to manual review has been
+  agreed with the booking module owner.
+
+**PROPOSED** statuses (not implemented): `refund_pending` (a manual refund has been decided and is
+processed out of band) and `refunded` (manual refund completion recorded).
 
 Only the booking module may transition `HELD` to `CONFIRMED`, and only after its atomic deadline
 check accepts the payment as timely. The authority and precedence of provider timestamps versus
 Sessionly's verified receipt time are unresolved and require team approval.
+
+**Payment transaction flow (implemented).** A payment attempt uses two transactions:
+
+1. *Claim:* take a payments-owned PostgreSQL advisory lock for the booking, verify the client
+   access token through `booking.api.get_client_booking`, then either find the attempt recorded
+   for the idempotency key or read the payable snapshot through `booking.api.get_payable_booking`
+   and insert a `pending` row. This transaction commits before any charge.
+2. *Process:* take the same advisory lock and lock the payment row, call the gateway with the
+   payment ID as the gateway idempotency key, store the provider reference, and call
+   `booking.api.confirm_held_booking`, which joins the transaction. The payment status and the
+   booking transition commit together. A confirmation error inside its savepoint leaves the charge
+   recorded as `manual_review`.
+
+The lock order is the payments advisory lock, then the payment row, then booking's own locks
+(psychologist, then booking). **PROPOSED:** the advisory-lock approach and the foreign key from
+`payments.booking_id` to `bookings.id` require review by the booking module owner.
+
+**Recovery limitation.** If the process stops after the claim commits, the attempt remains
+`pending` and blocks other attempts for that booking. A retry with the same idempotency key resumes
+it. There is no background reconciliation process yet; a stuck `pending` attempt requires manual
+resolution.
 
 ## Double-booking and expiry safeguards
 

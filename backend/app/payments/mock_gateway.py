@@ -42,3 +42,16 @@ class MockPaymentGateway:
             )
             self._processed[request.idempotency_key] = (request, result)
             return result
+
+
+_SHARED_GATEWAYS = {outcome: MockPaymentGateway(outcome) for outcome in PaymentOutcome}
+
+
+def shared_mock_gateway(outcome: PaymentOutcome) -> MockPaymentGateway:
+    """Return the process-wide mock gateway for an outcome.
+
+    Sharing one instance per outcome keeps the mock's in-memory idempotency across requests in the
+    same process, so retrying an interrupted attempt returns the same mock reference. It does not
+    survive a restart; durable idempotency is provided by the payments table.
+    """
+    return _SHARED_GATEWAYS[PaymentOutcome(outcome)]

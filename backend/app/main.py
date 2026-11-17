@@ -14,12 +14,14 @@ from app.notifications.email_sender import (
     UnconfiguredEmailSender,
 )
 from app.notifications.router import router as notifications_router
+from app.payments.router import router as payments_router
 
 app = FastAPI(title="Sessionly API")
 app.include_router(accounts_router)
 app.include_router(availability_router)
 app.include_router(notifications_router)
 app.include_router(booking_router)
+app.include_router(payments_router)
 
 
 def build_email_sender():

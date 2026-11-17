@@ -9,6 +9,7 @@ from app.accounts import models as account_models  # noqa: F401
 from app.availability import models as availability_models  # noqa: F401
 from app.booking import models as booking_models  # noqa: F401
 from app.notifications import models as notification_models  # noqa: F401
+from app.payments import models as payment_models  # noqa: F401
 
 # Import future model modules here so Alembic can discover their metadata.
 
