@@ -38,6 +38,9 @@ The prototype is demonstrated on 19 November 2026. The instructor's graded crite
 For Sessionly, only psychologists have accounts, and they authenticate exclusively through Google
 OAuth. Clients do not have accounts. This clarifies how the course criterion applies to the product.
 
+The instructor's feedback on the pitch and the planned follow-up are recorded in
+`docs/PITCH_FEEDBACK.md`. Consider it when planning features, documentation and the presentation.
+
 ## First Version Scope
 
 - **P0 (first MVP milestone):** psychologist Google OAuth sign-in; available hours with session

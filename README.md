@@ -219,6 +219,8 @@ the exact frontend origin, and frontend agreement on CSRF handling. The producti
 `docs/PRODUCT_SPEC.md` separates approved product requirements from proposed technical decisions
 and unresolved questions. `docs/API_CONTRACT.md` and `docs/DATABASE_DESIGN.md` contain concrete
 implementation proposals; details marked **PROPOSED** are not approved requirements.
+`docs/PITCH_FEEDBACK.md` summarises the instructor's feedback on the pitch and the team's planned
+follow-up.
 
 ## Team
 
