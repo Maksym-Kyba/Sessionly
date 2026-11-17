@@ -10,9 +10,15 @@ import { Card } from "@/components/ui/Card";
 import { Logo } from "@/components/ui/Logo";
 import { useCurrentPsychologist } from "@/hooks/useCurrentPsychologist";
 
-const upcomingSections = [
+type DashboardSection = { title: string; description: string; href?: string };
+
+const sections: DashboardSection[] = [
   { title: "Записи", description: "Найближчі сесії та їхні статуси." },
-  { title: "Доступність", description: "Робочі години, тривалість і вартість сесії." },
+  {
+    title: "Доступність",
+    description: "Робочі години, тривалість і вартість сесії.",
+    href: "/dashboard/availability",
+  },
   { title: "Профіль", description: "Ім'я, часовий пояс і посилання для клієнтів." },
 ];
 
@@ -86,13 +92,23 @@ export default function DashboardPage() {
             )}
 
             <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {upcomingSections.map((section) => (
-                <Card key={section.title} className="p-6">
+              {sections.map((section) => (
+                <Card key={section.title} className="flex flex-col p-6">
                   <div className="flex items-start justify-between gap-3">
                     <h2 className="text-xl text-ink">{section.title}</h2>
-                    <Badge tone="neutral">Незабаром</Badge>
+                    {!section.href && <Badge tone="neutral">Незабаром</Badge>}
                   </div>
                   <p className="mt-3 text-muted">{section.description}</p>
+                  {section.href && (
+                    <Button
+                      href={section.href}
+                      variant="secondary"
+                      size="sm"
+                      className="mt-5 self-start"
+                    >
+                      Налаштувати
+                    </Button>
+                  )}
                 </Card>
               ))}
             </div>
