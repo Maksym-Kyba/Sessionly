@@ -101,7 +101,7 @@ def request_email_verification(
             raise EmailDeliveryUnavailable("Email delivery failed") from None
 
 
-def consume_email_verification(session: Session, raw_token: str) -> tuple[str, datetime]:
+def consume_email_verification(session: Session, raw_token: str) -> tuple[str, datetime, str]:
     with session.begin():
         key_hash = _privacy_hash("verification-consume:global")
         count = repository.increment_rate_limit(session, key_hash, window_seconds=60)
@@ -113,6 +113,9 @@ def consume_email_verification(session: Session, raw_token: str) -> tuple[str, d
         now = session.scalar(func.clock_timestamp())
         if token is None or token.consumed_at is not None or now is None or token.expires_at <= now:
             raise InvalidVerificationToken
+        psychologist = accounts_api.psychologist_by_id(session, token.psychologist_id)
+        if psychologist is None:
+            raise InvalidVerificationToken
         token.consumed_at = now
         raw_grant = secrets.token_urlsafe(32)
         grant = repository.add_booking_grant(
@@ -122,7 +125,7 @@ def consume_email_verification(session: Session, raw_token: str) -> tuple[str, d
             _token_hash(raw_grant),
             settings.client_verification_ttl_seconds,
         )
-        return raw_grant, grant.expires_at
+        return raw_grant, grant.expires_at, psychologist.public_id
 
 
 def consume_booking_verification(

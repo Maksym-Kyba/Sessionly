@@ -1,5 +1,6 @@
 """Public interface for verified client identity and email delivery."""
 
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -19,7 +20,7 @@ def request_email_verification(
     service.request_email_verification(session, data, sender)
 
 
-def consume_email_verification(session: Session, raw_token: str):
+def consume_email_verification(session: Session, raw_token: str) -> tuple[str, datetime, str]:
     return service.consume_email_verification(session, raw_token)
 
 

@@ -47,7 +47,9 @@ def consume_verification(
     session: Session = Depends(get_db),
 ) -> VerificationGrantRead:
     try:
-        raw_grant, expires_at = api.consume_email_verification(session, data.token)
+        raw_grant, expires_at, psychologist_public_id = api.consume_email_verification(
+            session, data.token
+        )
     except api.VerificationRateLimited as exc:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -63,4 +65,5 @@ def consume_verification(
     return VerificationGrantRead(
         booking_verification_token=raw_grant,
         expires_at=expires_at,
+        psychologist_public_id=psychologist_public_id,
     )

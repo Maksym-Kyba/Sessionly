@@ -38,3 +38,4 @@ class VerificationGrantRead(BaseModel):
     status: str = "verified"
     booking_verification_token: str
     expires_at: datetime
+    psychologist_public_id: str

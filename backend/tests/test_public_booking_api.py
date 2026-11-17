@@ -57,10 +57,33 @@ async def _verification_grant(client, sender, psychologist, email="client@exampl
     raw_token = re.search(r"#token=([^&]+)$", link)
     assert raw_token is not None
     consume = await client.post(
-        "/api/v1/email-verifications/consume", json={"token": raw_token.group(1)}
+        "/api/v1/email-verifications/consume",
+        json={"token": raw_token.group(1), "psychologist_public_id": "client-controlled"},
     )
     assert consume.status_code == 200
+    assert consume.json()["psychologist_public_id"] == psychologist.public_id
     return consume.json()["booking_verification_token"]
+
+
+@pytest.mark.anyio
+async def test_verification_consume_returns_server_scoped_psychologist_public_id(
+    api_client, psychologist, email_sender
+):
+    await api_client.post(
+        "/api/v1/email-verifications",
+        json={"email": "client@example.test", "psychologist_public_id": psychologist.public_id},
+    )
+    raw_token = re.search(r"#token=([^&]+)$", email_sender.messages[-1].verification_url).group(1)
+
+    response = await api_client.post(
+        "/api/v1/email-verifications/consume",
+        json={"token": raw_token, "psychologist_public_id": "attacker-controlled"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["psychologist_public_id"] == psychologist.public_id
+    assert response.json()["booking_verification_token"]
+    assert response.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.anyio
@@ -208,6 +231,13 @@ async def test_verification_link_is_single_use_and_expired_links_fail(
         "/api/v1/email-verifications/consume", json={"token": raw_link_token}
     )
     assert replay.status_code == 400
+    assert replay.json() == {"detail": "Verification link is invalid or expired"}
+    assert "psychologist_public_id" not in replay.json()
+
+    invalid = await api_client.post("/api/v1/email-verifications/consume", json={"token": _key()})
+    assert invalid.status_code == 400
+    assert invalid.json() == {"detail": "Verification link is invalid or expired"}
+    assert "psychologist_public_id" not in invalid.json()
 
     await api_client.post(
         "/api/v1/email-verifications",
@@ -229,6 +259,8 @@ async def test_verification_link_is_single_use_and_expired_links_fail(
         "/api/v1/email-verifications/consume", json={"token": expired_raw_token}
     )
     assert expired.status_code == 400
+    assert expired.json() == {"detail": "Verification link is invalid or expired"}
+    assert "psychologist_public_id" not in expired.json()
 
 
 @pytest.mark.anyio

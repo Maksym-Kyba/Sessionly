@@ -78,9 +78,15 @@ Consume request and response examples:
 {
   "status": "verified",
   "booking_verification_token": "short-lived-booking-token",
-  "expires_at": "2026-11-15T12:30:00Z"
+  "expires_at": "2026-11-15T12:30:00Z",
+  "psychologist_public_id": "psych_123"
 }
 ```
+
+`psychologist_public_id` is resolved from the consumed verification record and its associated
+psychologist. The consume request accepts only the one-time token; any client-supplied psychologist
+identifier is ignored and never determines the response scope. Invalid, expired, or consumed tokens
+return the same generic error without a psychologist identifier.
 
 Implemented behavior: verification links and booking verification grants expire after 30 minutes.
 Tokens are generated with 256 bits of randomness, only SHA-256 hashes are stored, and each link and
