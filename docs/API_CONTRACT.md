@@ -4,8 +4,9 @@
 
 Routes and payloads in this document are **PROPOSED** unless a section says they are implemented.
 The psychologist OAuth/session endpoints, public profile, availability, and Booking Phase A and B
-flows are implemented on the backend branch. Payment routes in this document remain proposals and
-are not implemented. Product rules in `PRODUCT_SPEC.md` remain authoritative.
+flows, including the authenticated psychologist profile update, are implemented on the backend
+branch. Payment routes in this document remain proposals and are not implemented. Product rules in
+`PRODUCT_SPEC.md` remain authoritative.
 
 Base path proposal: `/api/v1`. JSON is used unless a route redirects to an OAuth provider. Times
 are RFC 3339 timestamps in UTC. IDs are opaque strings in examples.
@@ -24,6 +25,8 @@ here.
   create or locate the psychologist identity, then establish an application session.
 - `POST /api/v1/auth/logout` — invalidate the current psychologist session.
 - `GET /api/v1/accounts/me` — return the authenticated psychologist profile.
+- `PATCH /api/v1/accounts/me` — partially update the authenticated psychologist's display name
+  and scheduling time zone.
 
 **Implemented callback/session behavior:** set a secure, HttpOnly session cookie and redirect to
 the configured, allowlisted frontend URL. The implementation uses an opaque server-side session token
@@ -35,12 +38,40 @@ matching email without a linked Google subject returns a generic `account_unavai
 result. No password or alternate psychologist login endpoint is proposed.
 
 `GET /api/v1/accounts/me` returns the psychologist profile and a session-bound `csrf_token`. Cookie
-authenticated POST/PUT/DELETE requests, including logout and availability changes, must send that
-value in `X-CSRF-Token` and an allowed `Origin`. The session cookie is HttpOnly; local HTTP uses
+authenticated POST/PUT/PATCH/DELETE requests, including logout, profile updates, and availability
+changes, must send that value in `X-CSRF-Token` and an allowed `Origin`. The session cookie is
+HttpOnly; local HTTP uses
 `SameSite=Lax` with `Secure=false`, while HTTPS deployments use `Secure=true`. The default
 production cookie name uses the `__Host-` prefix, `Path=/`, and no `Domain` attribute. If frontend
 and backend are cross-site in production, the deployment must explicitly use `SameSite=None` and
 HTTPS; this requires frontend confirmation.
+
+**Implemented profile update behavior:** the request body accepts either or both fields; omitted
+fields remain unchanged. Explicit `null` values and unknown fields are rejected. `display_name` is
+trimmed and must contain 1–200 characters. `time_zone` is trimmed, must be a valid IANA time-zone
+identifier, and must be no longer than 64 characters. An empty object is a no-op. Changing the time
+zone reconciles future generated availability slots in the same transaction.
+
+Request example:
+
+```json
+{
+  "display_name": "Dr. Example",
+  "time_zone": "Europe/Kyiv"
+}
+```
+
+The response uses the same shape as `GET /api/v1/accounts/me`:
+
+```json
+{
+  "public_id": "psych_123",
+  "display_name": "Dr. Example",
+  "email": "psychologist@example.test",
+  "time_zone": "Europe/Kyiv",
+  "csrf_token": "session-bound-csrf-token"
+}
+```
 
 ### Client email verification
 
