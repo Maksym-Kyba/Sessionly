@@ -13,6 +13,26 @@ from app.availability.service import create_rule
 from app.core.config import settings
 
 
+@pytest.mark.anyio
+async def test_profile_patch_cors_preflight_allows_only_configured_origins(api_client):
+    headers = {
+        "Origin": "http://localhost:3000",
+        "Access-Control-Request-Method": "PATCH",
+        "Access-Control-Request-Headers": "content-type,x-csrf-token",
+    }
+    allowed = await api_client.options("/api/v1/accounts/me", headers=headers)
+    disallowed = await api_client.options(
+        "/api/v1/accounts/me",
+        headers={**headers, "Origin": "https://attacker.example"},
+    )
+
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert "PATCH" in allowed.headers["access-control-allow-methods"]
+    assert disallowed.status_code == 400
+    assert "access-control-allow-origin" not in disallowed.headers
+
+
 async def _sign_in(api_client, database_engine, psychologist, monkeypatch) -> dict[str, str]:
     monkeypatch.setattr(settings, "csrf_secret_key", "profile-update-test-secret-value-32")
     monkeypatch.setattr(settings, "session_cookie_name", "sessionly_profile_test")

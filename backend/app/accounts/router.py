@@ -175,8 +175,6 @@ def update_me(
     if psychologist is None:
         raise HTTPException(status_code=401, detail="Psychologist authentication required")
     raw_token = request.cookies.get(settings.session_cookie_name)
-    if not raw_token or not settings.csrf_secret_key:
-        raise HTTPException(status_code=503, detail="Session security is not configured")
     return PsychologistMeRead(
         public_id=psychologist.public_id,
         display_name=psychologist.display_name,
