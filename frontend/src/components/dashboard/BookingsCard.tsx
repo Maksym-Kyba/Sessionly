@@ -10,7 +10,49 @@ import { Card } from "@/components/ui/Card";
 type BookingsState =
   | { status: "loading" }
   | { status: "error" }
-  | { status: "loaded"; bookings: PsychologistBooking[]; total: number };
+  | {
+      status: "loaded";
+      upcoming: PsychologistBooking[];
+      upcomingTotal: number;
+      /** Most recent past bookings, newest first. */
+      past: PsychologistBooking[];
+      pastTotal: number;
+    };
+
+const UPCOMING_LIMIT = 100;
+const PAST_LIMIT = 20;
+
+/**
+ * Loads upcoming bookings with `from=now` and the most recent past bookings. The list is ordered by
+ * `starts_at` ascending, so past bookings occupy the first `pastTotal` positions of the unfiltered
+ * list, where `pastTotal` is the unfiltered total minus the filtered one.
+ */
+async function loadBookings(): Promise<Extract<BookingsState, { status: "loaded" }>> {
+  const now = new Date();
+  const [upcomingPage, allPage] = await Promise.all([
+    listMyBookings({ limit: UPCOMING_LIMIT, from: now }),
+    listMyBookings({ limit: 1 }),
+  ]);
+  const pastTotal = Math.max(0, allPage.total - upcomingPage.total);
+  let past: PsychologistBooking[] = [];
+  if (pastTotal > 0) {
+    const pastPage = await listMyBookings({
+      limit: Math.min(PAST_LIMIT, pastTotal),
+      offset: Math.max(0, pastTotal - PAST_LIMIT),
+    });
+    // Guards against a booking created between the requests shifting the page.
+    past = pastPage.items
+      .filter((booking) => new Date(booking.starts_at).getTime() < now.getTime())
+      .reverse();
+  }
+  return {
+    status: "loaded",
+    upcoming: upcomingPage.items,
+    upcomingTotal: upcomingPage.total,
+    past,
+    pastTotal,
+  };
+}
 
 const statusLabels: Record<string, { label: string; tone: BadgeTone }> = {
   HELD: { label: "Очікує оплати", tone: "warning" },
@@ -90,9 +132,9 @@ export function BookingsCard({ timeZone }: { timeZone: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    listMyBookings()
-      .then((page) => {
-        if (!cancelled) setState({ status: "loaded", bookings: page.items, total: page.total });
+    loadBookings()
+      .then((loaded) => {
+        if (!cancelled) setState(loaded);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -107,24 +149,13 @@ export function BookingsCard({ timeZone }: { timeZone: string }) {
     };
   }, [router]);
 
-  const now = Date.now();
-  const upcoming =
-    state.status === "loaded"
-      ? state.bookings.filter((booking) => new Date(booking.ends_at).getTime() >= now)
-      : [];
-  // The backend orders bookings by start time ascending; show the most recent past sessions first.
-  const past =
-    state.status === "loaded"
-      ? state.bookings.filter((booking) => new Date(booking.ends_at).getTime() < now).reverse()
-      : [];
+  const total = state.status === "loaded" ? state.upcomingTotal + state.pastTotal : 0;
 
   return (
     <Card className="mt-10 p-6">
       <div className="flex items-start justify-between gap-3">
         <h2 className="text-xl text-ink">Записи</h2>
-        {state.status === "loaded" && state.total > 0 && (
-          <Badge tone="neutral">Усього: {state.total}</Badge>
-        )}
+        {total > 0 && <Badge tone="neutral">Усього: {total}</Badge>}
       </div>
 
       {state.status === "loading" && <p className="mt-3 text-muted">Завантаження записів…</p>}
@@ -135,20 +166,27 @@ export function BookingsCard({ timeZone }: { timeZone: string }) {
         </p>
       )}
 
-      {state.status === "loaded" && state.bookings.length === 0 && (
+      {state.status === "loaded" && total === 0 && (
         <p className="mt-3 text-muted">
           Записів поки немає. Щойно клієнт забронює сесію, вона з&apos;явиться тут.
         </p>
       )}
 
-      {state.status === "loaded" && state.bookings.length > 0 && (
+      {state.status === "loaded" && total > 0 && (
         <>
-          {upcoming.length === 0 && <p className="mt-3 text-muted">Найближчих сесій немає.</p>}
-          <BookingList title="Найближчі" bookings={upcoming} timeZone={timeZone} />
-          <BookingList title="Минулі" bookings={past} timeZone={timeZone} />
-          {state.total > state.bookings.length && (
-            <p className="mt-4 text-sm text-muted">
-              Показано {state.bookings.length} із {state.total} записів.
+          {state.upcoming.length === 0 && (
+            <p className="mt-3 text-muted">Найближчих сесій немає.</p>
+          )}
+          <BookingList title="Найближчі" bookings={state.upcoming} timeZone={timeZone} />
+          {state.upcomingTotal > state.upcoming.length && (
+            <p className="mt-2 text-sm text-muted">
+              Показано {state.upcoming.length} найближчих із {state.upcomingTotal}.
+            </p>
+          )}
+          <BookingList title="Минулі" bookings={state.past} timeZone={timeZone} />
+          {state.pastTotal > state.past.length && state.past.length > 0 && (
+            <p className="mt-2 text-sm text-muted">
+              Показано останні {state.past.length} із {state.pastTotal}.
             </p>
           )}
         </>

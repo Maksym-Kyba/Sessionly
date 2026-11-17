@@ -32,12 +32,25 @@ export type PsychologistBookingPage = {
 /** Raised when the backend rejects the request because the session is missing or expired. */
 export class BookingsUnauthorizedError extends Error {}
 
+export type ListBookingsOptions = {
+  /** 1–100. */
+  limit: number;
+  offset?: number;
+  /** Only bookings with `starts_at >= from` (inclusive); `total` counts the filtered set. */
+  from?: Date;
+};
+
 /**
  * Returns a page of the signed-in psychologist's bookings.
  * The session itself is an HttpOnly cookie that the browser sends automatically.
  */
-export async function listMyBookings(limit = 100, offset = 0): Promise<PsychologistBookingPage> {
+export async function listMyBookings({
+  limit,
+  offset = 0,
+  from,
+}: ListBookingsOptions): Promise<PsychologistBookingPage> {
   const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (from) query.set("from", from.toISOString());
   const response = await fetch(`${API_BASE_URL}/api/v1/accounts/me/bookings?${query}`, {
     credentials: "include",
     cache: "no-store",
