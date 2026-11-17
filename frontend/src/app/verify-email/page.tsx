@@ -37,6 +37,9 @@ type VerifyState =
       previousPriceMinor: number | null;
     }
   | { status: "holding"; selection: PendingSelection }
+  /** The current slot terms could not be loaded; confirmation stays disabled until they are. */
+  | { status: "check-failed"; selection: PendingSelection; grant: StoredGrant }
+  | { status: "checking"; selection: PendingSelection }
   | { status: "invalid-link"; psychologistPublicId: string | null }
   | { status: "rate-limited" }
   | { status: "slot-taken"; psychologistPublicId: string }
@@ -47,7 +50,7 @@ type VerifyState =
 type SlotCheck =
   | { kind: "available"; selection: PendingSelection; previousPriceMinor: number | null }
   | { kind: "taken" }
-  /** The check failed (network); the booking page still shows the price the backend applied. */
+  /** The check failed (network); confirmation is not offered until a retry succeeds. */
   | { kind: "unknown" };
 
 /**
@@ -77,6 +80,27 @@ async function checkSlot(selection: PendingSelection): Promise<SlotCheck> {
     };
   } catch {
     return { kind: "unknown" };
+  }
+}
+
+/**
+ * Maps a slot check to the page state. Fails closed: the client can confirm only after the current
+ * slot terms were loaded and shown.
+ */
+function stateAfterCheck(check: SlotCheck, selection: PendingSelection, grant: StoredGrant): VerifyState {
+  switch (check.kind) {
+    case "available":
+      return {
+        status: "confirm",
+        selection: check.selection,
+        grant,
+        previousPriceMinor: check.previousPriceMinor,
+      };
+    case "taken":
+      clearPendingSelection();
+      return { status: "slot-taken", psychologistPublicId: grant.psychologistPublicId };
+    default:
+      return { status: "check-failed", selection, grant };
   }
 }
 
@@ -181,26 +205,16 @@ export default function VerifyEmailPage() {
         return;
       }
 
-      const check = await checkSlot(selection);
-      if (check.kind === "taken") {
-        clearPendingSelection();
-        setState({ status: "slot-taken", psychologistPublicId: grant.psychologistPublicId });
-        return;
-      }
-      setState(
-        check.kind === "available"
-          ? {
-              status: "confirm",
-              selection: check.selection,
-              grant,
-              previousPriceMinor: check.previousPriceMinor,
-            }
-          : { status: "confirm", selection, grant, previousPriceMinor: null },
-      );
+      setState(stateAfterCheck(await checkSlot(selection), selection, grant));
     }
 
     void run();
   }, [router]);
+
+  async function retryCheck(selection: PendingSelection, grant: StoredGrant) {
+    setState({ status: "checking", selection });
+    setState(stateAfterCheck(await checkSlot(selection), selection, grant));
+  }
 
   async function confirmBooking(selection: PendingSelection, grant: StoredGrant) {
     setState({ status: "holding", selection });
@@ -228,7 +242,12 @@ export default function VerifyEmailPage() {
   return (
     <BookingPageShell>
       <Card className="mx-auto flex max-w-xl flex-col items-center gap-4 p-8 text-center">
-        <VerifyContent state={state} retryFailed={retryFailed} onConfirm={confirmBooking} />
+        <VerifyContent
+          state={state}
+          retryFailed={retryFailed}
+          onConfirm={confirmBooking}
+          onRetryCheck={retryCheck}
+        />
       </Card>
     </BookingPageShell>
   );
@@ -243,14 +262,23 @@ function backToPsychologist(publicId: string | null, label: string, variant?: "g
   );
 }
 
-function SlotSummary({ selection }: { selection: PendingSelection }) {
+/** The selected slot; the price is hidden when it could not be confirmed as current. */
+function SlotSummary({
+  selection,
+  showPrice = true,
+}: {
+  selection: PendingSelection;
+  showPrice?: boolean;
+}) {
   return (
     <div className="w-full rounded-xl bg-mint-50 px-4 py-4 text-[15px]">
       <p className="text-[13px] font-bold text-muted">{selection.psychologistName}</p>
       <p className="mt-1 font-bold first-letter:uppercase">
         {formatSlot(selection.startsAt, selection.endsAt, selection.timeZone)}
       </p>
-      <p className="text-muted">{formatPrice(selection.priceMinor, selection.currency)}</p>
+      {showPrice && (
+        <p className="text-muted">{formatPrice(selection.priceMinor, selection.currency)}</p>
+      )}
     </div>
   );
 }
@@ -259,10 +287,12 @@ function VerifyContent({
   state,
   retryFailed,
   onConfirm,
+  onRetryCheck,
 }: {
   state: VerifyState;
   retryFailed: boolean;
   onConfirm: (selection: PendingSelection, grant: StoredGrant) => void;
+  onRetryCheck: (selection: PendingSelection, grant: StoredGrant) => void;
 }) {
   switch (state.status) {
     case "working":
@@ -294,6 +324,28 @@ function VerifyContent({
             Підтвердити бронювання
           </Button>
           {backToPsychologist(state.grant.psychologistPublicId, "Обрати інший час", "ghost")}
+        </>
+      );
+    case "check-failed":
+      return (
+        <>
+          <h1 className="text-3xl">Пошту підтверджено</h1>
+          <SlotSummary selection={state.selection} showPrice={false} />
+          <Notice tone="danger">
+            Не вдалося перевірити актуальну вартість і доступність цього часу. Перевірте з’єднання
+            з інтернетом і спробуйте ще раз — підтвердити бронювання можна буде після перевірки.
+          </Notice>
+          <Button fullWidth onClick={() => onRetryCheck(state.selection, state.grant)}>
+            Спробувати ще раз
+          </Button>
+          {backToPsychologist(state.grant.psychologistPublicId, "Обрати інший час", "ghost")}
+        </>
+      );
+    case "checking":
+      return (
+        <>
+          <h1 className="text-3xl">Перевіряємо час…</h1>
+          <SlotSummary selection={state.selection} showPrice={false} />
         </>
       );
     case "holding":
