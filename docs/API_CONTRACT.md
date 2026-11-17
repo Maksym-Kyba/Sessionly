@@ -4,8 +4,9 @@
 
 Routes and payloads in this document are **PROPOSED** unless a section says they are implemented.
 The psychologist OAuth/session endpoints, public profile, availability, and Booking Phase A and B
-flows are implemented on the backend branch. Payment routes in this document remain proposals and
-are not implemented. Product rules in `PRODUCT_SPEC.md` remain authoritative.
+flows, including the authenticated psychologist profile update, are implemented on the backend
+branch. Payment routes in this document remain proposals and are not implemented. Product rules in
+`PRODUCT_SPEC.md` remain authoritative.
 
 Base path proposal: `/api/v1`. JSON is used unless a route redirects to an OAuth provider. Times
 are RFC 3339 timestamps in UTC. IDs are opaque strings in examples.
@@ -24,6 +25,8 @@ here.
   create or locate the psychologist identity, then establish an application session.
 - `POST /api/v1/auth/logout` — invalidate the current psychologist session.
 - `GET /api/v1/accounts/me` — return the authenticated psychologist profile.
+- `PATCH /api/v1/accounts/me` — partially update the authenticated psychologist's display name
+  and scheduling time zone.
 
 **Implemented callback/session behavior:** set a secure, HttpOnly session cookie and redirect to
 the configured, allowlisted frontend URL. The implementation uses an opaque server-side session token
@@ -35,12 +38,40 @@ matching email without a linked Google subject returns a generic `account_unavai
 result. No password or alternate psychologist login endpoint is proposed.
 
 `GET /api/v1/accounts/me` returns the psychologist profile and a session-bound `csrf_token`. Cookie
-authenticated POST/PUT/DELETE requests, including logout and availability changes, must send that
-value in `X-CSRF-Token` and an allowed `Origin`. The session cookie is HttpOnly; local HTTP uses
+authenticated POST/PUT/PATCH/DELETE requests, including logout, profile updates, and availability
+changes, must send that value in `X-CSRF-Token` and an allowed `Origin`. The session cookie is
+HttpOnly; local HTTP uses
 `SameSite=Lax` with `Secure=false`, while HTTPS deployments use `Secure=true`. The default
 production cookie name uses the `__Host-` prefix, `Path=/`, and no `Domain` attribute. If frontend
 and backend are cross-site in production, the deployment must explicitly use `SameSite=None` and
 HTTPS; this requires frontend confirmation.
+
+**Implemented profile update behavior:** the request body accepts either or both fields; omitted
+fields remain unchanged. Explicit `null` values and unknown fields are rejected. `display_name` is
+trimmed and must contain 1–200 characters. `time_zone` is trimmed, must be a valid IANA time-zone
+identifier, and must be no longer than 64 characters. An empty object is a no-op. Changing the time
+zone reconciles future generated availability slots in the same transaction.
+
+Request example:
+
+```json
+{
+  "display_name": "Dr. Example",
+  "time_zone": "Europe/Kyiv"
+}
+```
+
+The response uses the same shape as `GET /api/v1/accounts/me`:
+
+```json
+{
+  "public_id": "psych_123",
+  "display_name": "Dr. Example",
+  "email": "psychologist@example.test",
+  "time_zone": "Europe/Kyiv",
+  "csrf_token": "session-bound-csrf-token"
+}
+```
 
 ### Client email verification
 
@@ -294,6 +325,57 @@ booking row.
 - `GET /api/v1/bookings/{booking_id}` — retrieve booking/payment progress using the client bearer
   token returned by booking creation or an authenticated psychologist session.
 - `GET /api/v1/accounts/me/bookings` — list bookings for the authenticated psychologist.
+
+### Psychologist dashboard bookings
+
+`GET /api/v1/accounts/me/bookings` requires a valid psychologist session cookie. It returns only
+bookings whose `psychologist_id` matches that session. No CSRF token is required for this `GET`.
+The response is `Cache-Control: no-store`. Query parameters are `limit` (default `20`, range
+`1`–`100`), `offset` (default `0`, range `0`–`100000`), and optional `from`. `from` must be a
+timezone-aware ISO 8601 datetime; UTC timestamps may use a trailing `Z`. When provided, the endpoint
+includes only bookings with `starts_at >= from` (the boundary is inclusive). Malformed or
+timezone-naive values return `422`.
+
+Example, including all psychologist bookings starting at or after the UTC boundary, with the second
+page of up to 20 matching bookings:
+
+```http
+GET /api/v1/accounts/me/bookings?from=2026-11-18T12%3A00%3A00Z&limit=20&offset=20
+```
+
+Bookings are ordered by `starts_at` ascending, then `id` ascending for deterministic ties. `total`
+counts all bookings belonging to the authenticated psychologist that match `from`, before applying
+`limit` and `offset`. Without `from`, the endpoint retains its existing behavior and returns the
+psychologist's full booking history. A `HELD` booking whose `hold_expires_at` has passed is
+represented as `EXPIRED` in this response, consistent with the single-booking read.
+
+Response example:
+
+```json
+{
+  "items": [
+    {
+      "id": "6e88d567-aeca-477d-a84b-243401925480",
+      "status": "CONFIRMED",
+      "starts_at": "2026-11-18T12:00:00Z",
+      "ends_at": "2026-11-18T12:50:00Z",
+      "client_email": "client@example.test",
+      "session_duration_minutes": 50,
+      "price_minor": 120000,
+      "currency": "UAH",
+      "created_at": "2026-11-15T12:00:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+`client_email` is the email already stored on the booking and is returned only to the psychologist
+who owns that booking. It is `null` if no email is stored. The listed appointment, duration and
+price values come from the immutable booking snapshots. An empty page uses the same shape with
+`items: []` and `total: 0` when the psychologist has no bookings.
 
 Create request (the `idempotency_key` is sent in the `Idempotency-Key` header):
 

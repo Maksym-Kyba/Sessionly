@@ -77,6 +77,27 @@ class ClientBooking:
     created_at: datetime
 
 
+@dataclass(frozen=True)
+class PsychologistBooking:
+    id: UUID
+    status: str
+    starts_at: datetime
+    ends_at: datetime
+    client_email: str | None
+    session_duration_minutes: int
+    price_minor: int
+    currency: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class PsychologistBookingPage:
+    items: list[PsychologistBooking]
+    total: int
+    limit: int
+    offset: int
+
+
 class PublicBookingCreateRequest(BaseModel):
     slot_id: UUID
     booking_verification_token: str = Field(min_length=32, max_length=256)
@@ -118,3 +139,22 @@ class ClientBookingRead(BaseModel):
     currency: str
     created_at: datetime
     hold_expires_at: datetime
+
+
+class PsychologistBookingRead(BaseModel):
+    id: UUID
+    status: str
+    starts_at: datetime
+    ends_at: datetime
+    client_email: str | None
+    session_duration_minutes: int
+    price_minor: int
+    currency: str
+    created_at: datetime
+
+
+class PsychologistBookingPageRead(BaseModel):
+    items: list[PsychologistBookingRead]
+    total: int
+    limit: int
+    offset: int

@@ -21,6 +21,7 @@ The site uses a free `sslip.io` hostname derived from the server's IP address (f
 | `docker-compose.prod.yml` | Production services: `db`, `migrate`, `backend`, `frontend`, `caddy` |
 | `Caddyfile` | HTTPS and routing between the frontend and the backend |
 | `.env.example` | Template for the production environment file kept on the server |
+| `email.env.example` | Template for the backend-only Gmail App Password file kept on the server |
 | `scripts/deploy.sh` | Deploys a Git branch to the server and restarts the stack |
 
 ## Prerequisites
@@ -56,16 +57,46 @@ created the infrastructure keeps it; without it, Terraform cannot update or dest
 
 1. In Google Cloud Console, add the redirect URI
    `https://<site_domain>/api/v1/auth/google/callback` to the OAuth web client.
-2. Create the production environment file on the server from the template:
+2. Create the production environment files on the server from their templates. The Gmail file is
+   optional if email delivery is not configured yet; the deploy script installs a blank template
+   and the application starts with verification delivery failing closed.
 
    ```bash
    scp -i ~/.ssh/sessionly infra/.env.example ubuntu@<public_ip>:/opt/sessionly/.env
+   scp -i ~/.ssh/sessionly infra/email.env.example ubuntu@<public_ip>:/opt/sessionly/email.env
    ssh -i ~/.ssh/sessionly ubuntu@<public_ip>
    nano /opt/sessionly/.env
+   nano /opt/sessionly/email.env
    ```
 
    Replace every `<domain>` with `site_domain` and fill in the database password, Google OAuth
-   credentials and secret keys. The file stays on the server and is never committed.
+   credentials and secret keys. For Gmail delivery, set `GMAIL_SMTP_USERNAME` in `.env` and
+   `GMAIL_APP_PASSWORD` in `email.env`. Set the App Password
+   only in `/opt/sessionly/email.env`; set its permissions with `chmod 600` on both environment
+   files. The deploy script copies the Gmail file into `infra/` with mode `600`. Compose injects it
+   into the backend container only; the migration and frontend containers do not receive the App
+   Password. Neither file is committed.
+
+### Gmail demo sender
+
+Use a dedicated Google account for Sessionly rather than a teammate's personal account. Enable
+2-Step Verification with an eligible method, then create an App Password labeled for the Sessionly
+EC2 server. Some organization-managed accounts, Advanced Protection accounts, and accounts using
+only security keys may not offer App Passwords. Use the account's exact Gmail address as
+`GMAIL_SMTP_USERNAME` and sender address. Do not use the account's regular password.
+
+The backend connects to `smtp.gmail.com:587` using STARTTLS with certificate validation and a
+bounded socket timeout. EC2 restricts outbound SMTP port 25 by default; this deployment uses port
+587. Before deploying, verify outbound TLS connectivity from the EC2 host:
+
+```bash
+openssl s_client -starttls smtp -connect smtp.gmail.com:587 -crlf
+```
+
+Send a verification message to a team-controlled inbox and consume the link in another browser or
+device. Gmail is configured for the low-volume demo only. Revoke the App Password after the demo if
+it is no longer needed. Google revokes App Passwords when the account password changes, so a
+replacement must be configured after such a change.
 
 ## 3. Deploy
 
