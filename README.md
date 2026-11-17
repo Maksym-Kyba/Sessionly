@@ -2,7 +2,7 @@
 
 Booking, payments and scheduling for independent psychologists.
 
-**Live demo:** _URL will be added after deployment._
+**Live demo:** <https://13-48-32-89.sslip.io>
 
 Sessionly is developed as a team project for the Object-Oriented Analysis and Design course
 at the Ukrainian Catholic University.
