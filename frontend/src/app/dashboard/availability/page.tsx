@@ -225,7 +225,7 @@ export default function AvailabilityPage() {
     let cancelled = false;
     listAvailabilityRules()
       .then((rules) => {
-        if (!cancelled) setRulesState({ status: "loaded", rules: sortRules(rules) });
+        if (!cancelled) setRulesState({ status: "loaded", rules: sortRules(rules.filter((rule) => rule.is_active)) });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
