@@ -40,13 +40,29 @@ sets it) and `X-CSRF-Token` using the value returned by `/api/v1/accounts/me`. R
 calling `/accounts/me` after a page reload; keep it in memory and never store it as a session
 credential. Requests without a valid session or CSRF token are rejected.
 
+Psychologists can update their public display name and scheduling time zone with
+`PATCH /api/v1/accounts/me`. Send only the fields being changed; `display_name` must be non-blank
+and no longer than 200 characters, and `time_zone` must be a valid IANA time-zone identifier.
+Explicit `null` values are rejected. The response uses the same shape as `GET /api/v1/accounts/me`,
+including the refreshed `csrf_token`.
+
+Example request:
+
+```json
+{
+  "display_name": "Dr. Example",
+  "time_zone": "Europe/Kyiv"
+}
+```
+
 Call `POST /api/v1/auth/logout` with `credentials: "include"` and the CSRF header. The backend
 revokes the current session and clears the HttpOnly cookie.
 
 Public profile and availability routes do not require credentials. The current
-`GET /api/v1/psychologists/{public_id}` response contains `public_id`, `display_name`, and
-`time_zone`. Session duration and price remain available per availability slot; a global profile
-price/duration has not been defined.
+`GET /api/v1/psychologists/{public_id}` response contains `public_id`, `display_name`, `time_zone`,
+`session_duration_minutes`, `price_minor`, and `currency`. The last three fields are populated only
+when all future published availability slots share the same duration, price, and currency; otherwise
+all three are `null`. Each availability slot also returns its own price and currency.
 
 ## Origins and cookies
 

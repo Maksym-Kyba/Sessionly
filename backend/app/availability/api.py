@@ -43,3 +43,10 @@ def published_slots(
     session: Session, psychologist_id: UUID, from_time: datetime, to_time: datetime
 ) -> list[AvailabilitySlot]:
     return list_published_slots(session, psychologist_id, from_time, to_time)
+
+
+def refresh_slots(session: Session, psychologist_id: UUID) -> None:
+    """Reconcile future materialized slots after psychologist scheduling settings change."""
+    from app.availability.service import refresh_slots as refresh_service
+
+    refresh_service(session, psychologist_id)
