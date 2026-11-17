@@ -3,7 +3,12 @@
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import { type ClientBooking, getClientBooking, payBookingMock } from "@/api/booking";
+import {
+  type ClientBooking,
+  getClientBooking,
+  PaymentManualReviewError,
+  payBookingMock,
+} from "@/api/booking";
 import { errorStatus } from "@/api/errors";
 import { BookingPageShell, Notice } from "@/components/booking/BookingPageShell";
 import { PaymentAction } from "@/components/booking/PaymentAction";
@@ -146,7 +151,10 @@ export default function BookingStatusPage() {
       }
     } catch (error) {
       const status = errorStatus(error);
-      if (status === 409) {
+      if (error instanceof PaymentManualReviewError) {
+        // An earlier payment awaits manual review; the client must not pay again.
+        setPayment({ status: "manual-review" });
+      } else if (status === 409) {
         // Already confirmed, expired, or another attempt is in progress: show the current state.
         setPayment({ status: "not-payable" });
         setReloadCounter((value) => value + 1);
@@ -195,7 +203,7 @@ export default function BookingStatusPage() {
           </div>
         </dl>
 
-        {displayStatus === "HELD" && (
+        {displayStatus === "HELD" && payment.status !== "manual-review" && (
           <>
             <div className="text-center">
               <p className="text-muted">Час заброньовано для вас ще</p>
@@ -234,9 +242,9 @@ export default function BookingStatusPage() {
 
         {payment.status === "manual-review" && displayStatus !== "CONFIRMED" && (
           <Notice tone="warning">
-            Оплату отримано, але час бронювання вже минув, тому запис не підтверджено автоматично.
-            Психолог перевірить оплату вручну та зв’яжеться з вами щодо запису або повернення
-            коштів.
+            Оплату отримано, але бронювання не вдалося підтвердити автоматично, тому вона
+            потребує ручної перевірки. Повторно оплачувати не потрібно: психолог перевірить оплату
+            та зв’яжеться з вами щодо запису або повернення коштів.
           </Notice>
         )}
 

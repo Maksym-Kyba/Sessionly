@@ -114,6 +114,27 @@ export type MockPayment = {
 };
 
 /**
+ * Raised when an earlier payment for the booking awaits manual review. The backend then rejects
+ * new attempts with `409` ("A previous payment for this booking requires manual review").
+ */
+export class PaymentManualReviewError extends ApiError {
+  constructor() {
+    super("/bookings/{id}/payments/mock", 409);
+    this.name = "PaymentManualReviewError";
+  }
+}
+
+/** Returns the `detail` of an error response in lower case, or an empty string. */
+async function conflictDetail(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    return typeof body.detail === "string" ? body.detail.toLowerCase() : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Runs a development mock payment for a held booking. The amount always comes from the booking on
  * the backend. Repeating a request with the same `idempotencyKey` returns the stored result
  * instead of charging again, so the same key must be reused when retrying after a network error.
@@ -136,6 +157,9 @@ export async function payBookingMock(
       body: JSON.stringify({ result: "success" }),
     },
   );
+  if (response.status === 409 && (await conflictDetail(response)).includes("manual review")) {
+    throw new PaymentManualReviewError();
+  }
   if (!response.ok) {
     throw new ApiError("/bookings/{id}/payments/mock", response.status);
   }
