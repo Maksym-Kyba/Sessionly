@@ -40,13 +40,34 @@ sets it) and `X-CSRF-Token` using the value returned by `/api/v1/accounts/me`. R
 calling `/accounts/me` after a page reload; keep it in memory and never store it as a session
 credential. Requests without a valid session or CSRF token are rejected.
 
+Psychologists can update their public display name and scheduling time zone with
+`PATCH /api/v1/accounts/me`. The endpoint requires the psychologist's authenticated HttpOnly session
+cookie, the exact allowed `Origin`, and `X-CSRF-Token` from `/api/v1/accounts/me`. Send either or both
+fields: `display_name` is trimmed and must contain 1–200 characters; `time_zone` is trimmed and must
+be a valid IANA time-zone identifier no longer than 64 characters. Omitted fields remain unchanged;
+explicit `null`, blank values, and unknown fields are rejected. An empty object is a no-op. Changing
+the time zone also reconciles future generated availability slots. The response uses the same profile
+shape as `GET /api/v1/accounts/me` and includes the current `csrf_token`.
+
+Example request:
+
+```json
+{
+  "display_name": "Dr. Example",
+  "time_zone": "Europe/Kyiv"
+}
+```
+
+The response contains `public_id`, `display_name`, `email`, `time_zone`, and `csrf_token`.
+
 Call `POST /api/v1/auth/logout` with `credentials: "include"` and the CSRF header. The backend
 revokes the current session and clears the HttpOnly cookie.
 
 Public profile and availability routes do not require credentials. The current
-`GET /api/v1/psychologists/{public_id}` response contains `public_id`, `display_name`, and
-`time_zone`. Session duration and price remain available per availability slot; a global profile
-price/duration has not been defined.
+`GET /api/v1/psychologists/{public_id}` response contains `public_id`, `display_name`, `time_zone`,
+`session_duration_minutes`, `price_minor`, and `currency`. The last three fields are populated only
+when all future published availability slots share the same duration, price, and currency; otherwise
+all three are `null`. Each availability slot also returns its own price and currency.
 
 ## Origins and cookies
 
@@ -69,9 +90,8 @@ deployment.
 
 New psychologist profiles use the verified Google `name` claim. If it is absent, first-login
 profile creation is rejected rather than exposing the email local part as a public name. The initial
-time zone is `DEFAULT_PSYCHOLOGIST_TIME_ZONE` (default `Europe/Kyiv`). Confirm whether the frontend
-needs a profile-edit flow before the demo; no profile-update endpoint is included in this backend
-scope.
+time zone is `DEFAULT_PSYCHOLOGIST_TIME_ZONE` (default `Europe/Kyiv`); psychologists can change the
+display name and time zone through the profile-update endpoint described above.
 
 Do not log callback query strings: OAuth `code` and `state` arrive on the backend callback URL.
 The production proxy/access-log configuration must redact or omit that query string.
