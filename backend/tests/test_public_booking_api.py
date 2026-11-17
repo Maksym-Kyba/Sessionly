@@ -6,9 +6,10 @@ from datetime import UTC, datetime, timedelta
 from threading import Barrier
 
 import pytest
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
+from app.accounts.models import Psychologist
 from app.availability.models import AvailabilitySlot
 from app.booking.models import Booking, BookingIdempotencyKey, BookingStatus
 from app.booking.schemas import PaymentResult
@@ -19,8 +20,12 @@ from app.notifications.models import (
     EmailVerificationToken,
 )
 from app.notifications.schemas import VerificationRequest
-from app.notifications.service import request_email_verification
 from app.notifications.email_sender import UnconfiguredEmailSender
+from app.notifications.service import (
+    InvalidVerificationToken,
+    consume_email_verification,
+    request_email_verification,
+)
 from app.main import app
 
 
@@ -166,7 +171,7 @@ async def test_email_verification_is_generic_and_rate_limited(
 
 
 @pytest.mark.anyio
-async def test_unconfigured_email_sender_fails_closed_without_persisting_link(
+async def test_unconfigured_email_sender_fails_closed_and_keeps_committed_token(
     api_client, database_engine, psychologist, monkeypatch
 ):
     monkeypatch.setattr(app.state, "email_sender", UnconfiguredEmailSender())
@@ -180,10 +185,10 @@ async def test_unconfigured_email_sender_fails_closed_without_persisting_link(
     assert response.status_code == 503
     assert response.json() == {"detail": "Email delivery is temporarily unavailable"}
     with Session(database_engine) as session:
-        assert session.scalar(select(func.count()).select_from(EmailVerificationToken)) == 0
+        assert session.scalar(select(func.count()).select_from(EmailVerificationToken)) == 1
 
 
-def test_concurrent_verification_requests_leave_only_newest_link_active(
+def test_concurrent_verification_requests_keep_each_unexpired_link_usable(
     database_engine, psychologist, email_sender
 ):
     barrier = Barrier(2)
@@ -208,15 +213,155 @@ def test_concurrent_verification_requests_leave_only_newest_link_active(
             )
         ).all()
     assert len(email_sender.messages) == 2
-    assert len(active_tokens) == 1
-    active_hash = active_tokens[0].token_hash
+    assert len(active_tokens) == 2
+    active_hashes = {token.token_hash for token in active_tokens}
     sent_hashes = {
         hashlib.sha256(
             re.search(r"#token=([^&]+)$", message.verification_url).group(1).encode()
         ).hexdigest()
         for message in email_sender.messages
     }
-    assert active_hash in sent_hashes
+    assert active_hashes == sent_hashes
+
+
+@pytest.mark.anyio
+async def test_email_sender_runs_after_database_locks_are_released(
+    api_client, database_engine, psychologist, monkeypatch
+):
+    class LockCheckingSender:
+        lock_acquired = False
+        token_was_committed = False
+
+        def send_verification(self, recipient: str, verification_url: str) -> None:
+            with Session(database_engine) as session, session.begin():
+                session.execute(text("SET LOCAL lock_timeout = '250ms'"))
+                session.scalar(
+                    select(Psychologist).where(Psychologist.id == psychologist.id).with_for_update()
+                )
+                self.lock_acquired = True
+                self.token_was_committed = (
+                    session.scalar(
+                        select(func.count())
+                        .select_from(EmailVerificationToken)
+                        .where(EmailVerificationToken.email == recipient)
+                    )
+                    == 1
+                )
+
+    sender = LockCheckingSender()
+    monkeypatch.setattr(app.state, "email_sender", sender)
+    response = await api_client.post(
+        "/api/v1/email-verifications",
+        json={
+            "email": "lock-check@example.test",
+            "psychologist_public_id": psychologist.public_id,
+        },
+    )
+
+    assert response.status_code == 202
+    assert sender.lock_acquired
+    assert sender.token_was_committed
+
+
+class AcceptThenTimeoutSender:
+    def __init__(self) -> None:
+        self.verification_url: str | None = None
+
+    def send_verification(self, recipient: str, verification_url: str) -> None:
+        self.verification_url = verification_url
+        raise TimeoutError("simulated timeout after SMTP accepted the message")
+
+
+@pytest.mark.anyio
+async def test_ambiguous_smtp_timeout_leaves_delivered_verification_link_usable(
+    api_client, psychologist, monkeypatch
+):
+    sender = AcceptThenTimeoutSender()
+    monkeypatch.setattr(app.state, "email_sender", sender)
+    requested = await api_client.post(
+        "/api/v1/email-verifications",
+        json={"email": "timeout@example.test", "psychologist_public_id": psychologist.public_id},
+    )
+    assert requested.status_code == 503
+    assert sender.verification_url is not None
+
+    raw_token = re.search(r"#token=([^&]+)$", sender.verification_url).group(1)
+    consumed = await api_client.post(
+        "/api/v1/email-verifications/consume", json={"token": raw_token}
+    )
+    assert consumed.status_code == 200
+    assert consumed.json()["psychologist_public_id"] == psychologist.public_id
+
+
+@pytest.mark.anyio
+async def test_consuming_one_link_invalidates_all_sibling_links(
+    api_client, database_engine, psychologist, email_sender
+):
+    request = {
+        "email": "siblings@example.test",
+        "psychologist_public_id": psychologist.public_id,
+    }
+    for _ in range(2):
+        assert (
+            await api_client.post("/api/v1/email-verifications", json=request)
+        ).status_code == 202
+
+    raw_tokens = [
+        re.search(r"#token=([^&]+)$", message.verification_url).group(1)
+        for message in email_sender.messages
+    ]
+    consumed = await api_client.post(
+        "/api/v1/email-verifications/consume", json={"token": raw_tokens[0]}
+    )
+    sibling_replay = await api_client.post(
+        "/api/v1/email-verifications/consume", json={"token": raw_tokens[1]}
+    )
+
+    assert consumed.status_code == 200
+    assert sibling_replay.status_code == 400
+    assert sibling_replay.json() == {"detail": "Verification link is invalid or expired"}
+    with Session(database_engine) as session:
+        assert session.scalar(select(func.count()).select_from(BookingVerificationGrant)) == 1
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(EmailVerificationToken)
+                .where(EmailVerificationToken.consumed_at.is_not(None))
+            )
+            == 2
+        )
+
+
+def test_concurrent_sibling_link_consumption_creates_one_grant(
+    database_engine, psychologist, email_sender
+):
+    request = VerificationRequest(
+        email="concurrent-consume@example.test", psychologist_public_id=psychologist.public_id
+    )
+    for _ in range(2):
+        with Session(database_engine) as session:
+            request_email_verification(session, request, email_sender)
+    raw_tokens = [
+        re.search(r"#token=([^&]+)$", message.verification_url).group(1)
+        for message in email_sender.messages
+    ]
+    barrier = Barrier(2)
+
+    def consume(raw_token: str) -> str:
+        with Session(database_engine) as session:
+            barrier.wait(timeout=5)
+            try:
+                consume_email_verification(session, raw_token)
+            except InvalidVerificationToken:
+                return "invalid"
+            return "consumed"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(consume, raw_tokens))
+
+    assert sorted(results) == ["consumed", "invalid"]
+    with Session(database_engine) as session:
+        assert session.scalar(select(func.count()).select_from(BookingVerificationGrant)) == 1
 
 
 @pytest.mark.anyio

@@ -8,7 +8,11 @@ from app.accounts.router import router as accounts_router
 from app.booking.router import router as booking_router
 from app.core.config import settings
 from app.core.database import engine
-from app.notifications.email_sender import DevelopmentEmailSender, UnconfiguredEmailSender
+from app.notifications.email_sender import (
+    DevelopmentEmailSender,
+    GmailSMTPEmailSender,
+    UnconfiguredEmailSender,
+)
 from app.notifications.router import router as notifications_router
 
 app = FastAPI(title="Sessionly API")
@@ -16,9 +20,28 @@ app.include_router(accounts_router)
 app.include_router(availability_router)
 app.include_router(notifications_router)
 app.include_router(booking_router)
-app.state.email_sender = (
-    DevelopmentEmailSender() if settings.app_env == "development" else UnconfiguredEmailSender()
-)
+
+
+def build_email_sender():
+    if settings.app_env == "development" and settings.email_provider == "development":
+        return DevelopmentEmailSender()
+
+    username = (settings.gmail_smtp_username or "").strip()
+    app_password = (
+        settings.gmail_app_password.get_secret_value()
+        if settings.gmail_app_password is not None
+        else ""
+    )
+    if settings.email_provider == "gmail_smtp" and username and app_password.strip():
+        return GmailSMTPEmailSender(
+            username,
+            app_password,
+            timeout_seconds=settings.gmail_smtp_timeout_seconds,
+        )
+    return UnconfiguredEmailSender()
+
+
+app.state.email_sender = build_email_sender()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allowed_origins,
