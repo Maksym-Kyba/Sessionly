@@ -79,6 +79,36 @@ def get_email_verification(
     return session.scalar(statement)
 
 
+def get_email_verification_by_id(
+    session: Session, token_id: UUID, *, lock: bool = False
+) -> EmailVerificationToken | None:
+    statement = select(EmailVerificationToken).where(EmailVerificationToken.id == token_id)
+    if lock:
+        statement = statement.with_for_update()
+    return session.scalar(statement)
+
+
+def get_unconsumed_email_verifications(
+    session: Session,
+    psychologist_id: UUID,
+    email: str,
+    *,
+    lock: bool = False,
+) -> list[EmailVerificationToken]:
+    statement = (
+        select(EmailVerificationToken)
+        .where(
+            EmailVerificationToken.psychologist_id == psychologist_id,
+            EmailVerificationToken.email == email,
+            EmailVerificationToken.consumed_at.is_(None),
+        )
+        .order_by(EmailVerificationToken.id)
+    )
+    if lock:
+        statement = statement.with_for_update()
+    return list(session.scalars(statement))
+
+
 def add_booking_grant(
     session: Session,
     psychologist_id: UUID,

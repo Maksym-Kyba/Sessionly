@@ -41,6 +41,14 @@ def add_psychologist(session: Session, psychologist: Psychologist) -> None:
     session.flush()
 
 
+def update_psychologist_profile(
+    session: Session, psychologist: Psychologist, fields: dict[str, str]
+) -> None:
+    for field, value in fields.items():
+        setattr(psychologist, field, value)
+    session.flush()
+
+
 def add_google_identity(session: Session, identity: GoogleIdentity) -> None:
     session.add(identity)
 
