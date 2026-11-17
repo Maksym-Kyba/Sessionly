@@ -30,3 +30,14 @@ def get_current_psychologist_id(request: Request, session: Session = Depends(get
         ):
             raise HTTPException(status_code=403, detail="CSRF validation failed")
     return psychologist_id
+
+
+def get_optional_current_psychologist_id(
+    request: Request, session: Session = Depends(get_db)
+) -> UUID | None:
+    """Resolve an optional psychologist session for endpoints also accepting client bearer tokens."""
+    if request.headers.get("authorization"):
+        return None
+    if not request.cookies.get(settings.session_cookie_name):
+        return None
+    return get_current_psychologist_id(request, session)

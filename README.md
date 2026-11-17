@@ -167,6 +167,26 @@ Keep the local frontend redirect allowlist from `.env.example`; configured succe
 must match an allowlist entry exactly. OAuth login returns HTTP 503 until configured. There is no
 development authentication bypass.
 
+Client booking verification works locally without an email provider. The development email sender
+captures verification URLs in process memory for tests and local debugging; it does not expose a
+public link-inspection endpoint. The frontend verification page should read the token from the URL
+fragment, remove it from browser history, and POST it to `/api/v1/email-verifications/consume`.
+Configure `CLIENT_VERIFICATION_LINK_BASE_URL` to that frontend page and set a unique
+`CLIENT_VERIFICATION_SECRET_KEY` for each environment. The `.env.example` value is only a local
+placeholder. Email links and booking-verification grants expire after 30 minutes; client booking
+access tokens expire after 90 days and can be replaced after re-verifying the email.
+
+Production email delivery is not enabled by this Phase B implementation. Before deployment, add and
+configure an `EmailSender` provider adapter in the `notifications` module using credentials supplied
+through the deployment environment or secret store. Do not put provider credentials in Git. Until an
+adapter is configured, verification requests return a generic service-unavailable response. The
+configured verification URL must use HTTPS in production.
+
+After verification, the frontend sends `POST /api/v1/bookings` with the one-time booking-verification
+token and an `Idempotency-Key` header. The response creates a 15-minute hold and returns a one-time
+client access token. Payment processing is not part of this branch; the Payments module must
+integrate through Booking's internal API before a payment action is available.
+
 The local PostgreSQL service is available at `127.0.0.1:15432` and maps to port `5432` inside
 the container. `DATABASE_URL` in `.env` is for a backend process running on the host. If the
 backend runs as a Docker Compose service, configure it with

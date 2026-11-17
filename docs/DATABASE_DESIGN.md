@@ -64,16 +64,20 @@ expired. The implementation uses PKCE S256 and the `openid email profile` scopes
 
 ### `notifications` module
 
-**PROPOSED `email_verification_tokens`**
+**Implemented Phase B `email_verification_tokens`**
 
 - `id` primary key
 - `email` (sensitive; redact from logs)
-- `psychologist_id` or booking context, depending on final flow
+- `psychologist_id` scope for the requested psychologist
 - `token_hash` unique; never persist the raw link token
-- `expires_at`, `consumed_at`, `created_at`
+- `expires_at` (30 minutes after issuance), `consumed_at`, `created_at`
 
-A token can be consumed once. Token lifetime, resend policy, storage retention and email provider
-are open questions.
+A token can be consumed once. The module also owns `booking_verification_grants`, which contain a
+verified email and psychologist scope, a unique token hash, 30-minute expiry, and one-use
+`consumed_at`. `public_rate_limit_buckets` stores HMAC-derived rate-limit keys and fixed-window
+counters without storing client IP addresses. Email requests are limited per email and psychologist;
+token consumption also has a global short-window limit. Expired token/grant rows are pruned during
+verification requests. No raw link or grant token is stored.
 
 ### `availability` module
 
@@ -121,14 +125,22 @@ refreshes reconcile a single desired slot set. Retired or superseded slots are m
   copied from the selected slot as booking-owned immutable snapshots
 - `status`, `created_at`, `updated_at`, `hold_expires_at`, nullable `confirmed_at`, and nullable
   `payment_reference`
-- `client_email`, client access-token hashes, and token expiry are deferred to Phase B, after the
-  email-verification contract is agreed. No public hold-creation route exists in Phase A.
+- nullable `client_email`, `client_access_token_hash`, and `client_access_token_expires_at`; Phase A
+  internal holds may omit client credentials, while public Phase B bookings set the verified email
+  and only the hash of a 90-day opaque client access token
 
 `hold_expires_at` is set by a PostgreSQL default using the same `statement_timestamp()` as
 `created_at`, plus exactly 15 minutes. The implemented Phase A statuses are uppercase `HELD`,
 `CONFIRMED`, and `EXPIRED`. `HELD -> CONFIRMED` and `HELD -> EXPIRED` are the only transitions in
 this phase. A successful confirmation records one unique payment reference. Cancellation and
 completion states are deferred.
+
+**Implemented Phase B `booking_idempotency_keys`** stores a SHA-256 hash of the client idempotency
+key, a slot request fingerprint, a hash of the one-time verification grant, a nullable booking
+foreign key populated in the same transaction, and the creation timestamp. Raw idempotency, grant,
+and client access tokens are never stored. A replay with the same unexpired grant returns the
+booking/deadline without an access token. A replay with a fresh grant must match the booking email
+and psychologist, then rotates and returns a new access token.
 
 ### `payments` module
 
@@ -283,7 +295,8 @@ These PostgreSQL scenarios are covered by the Booking Phase A test suite.
 - Which payment timestamp is authoritative at the expiry boundary (provider confirmation time or
   Sessionly's verified receipt time)? This remains unresolved until the team approves the policy.
 - Whether manual cancellation/refund outcomes are recorded in the application and who can write them.
-- Booking access-token expiry, renewal and revocation policy for Phase B.
+- Whether the implemented 90-day client access-token lifetime should be changed after frontend
+  review.
 - Session duration limits beyond the current availability-window check.
 - Whether currencies beyond the initial `UAH` support should be enabled.
 - Client verification-token retention policy.

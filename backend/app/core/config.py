@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     session_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     default_psychologist_time_zone: str = "Europe/Kyiv"
     session_ttl_seconds: int = 7 * 24 * 60 * 60
+    client_verification_secret_key: str = "local-development-only-change-me-32"
+    client_verification_link_base_url: str = "http://localhost:3000/verify-email"
+    client_verification_ttl_seconds: int = 30 * 60
+    client_booking_token_ttl_seconds: int = 90 * 24 * 60 * 60
+    client_verification_email_limit_per_hour: int = 3
+    client_verification_psychologist_limit_per_hour: int = 100
+    client_verification_consume_limit_per_minute: int = 300
 
     model_config = SettingsConfigDict(
         env_file=REPOSITORY_ROOT / ".env",
@@ -75,6 +82,25 @@ class Settings(BaseSettings):
             raise ValueError("Psychologist sessions must expire after seven days")
         if self.csrf_secret_key and len(self.csrf_secret_key) < 32:
             raise ValueError("CSRF_SECRET_KEY must contain at least 32 characters")
+        if len(self.client_verification_secret_key) < 32:
+            raise ValueError("CLIENT_VERIFICATION_SECRET_KEY must contain at least 32 characters")
+        verification_url = urlsplit(self.client_verification_link_base_url)
+        local_verification_url = (
+            verification_url.scheme == "http" and verification_url.hostname == "localhost"
+        )
+        if (
+            (verification_url.scheme != "https" and not local_verification_url)
+            or not verification_url.hostname
+            or verification_url.query
+            or verification_url.fragment
+            or verification_url.username is not None
+            or verification_url.password is not None
+        ):
+            raise ValueError("Client verification links must use HTTPS or localhost without query")
+        if self.client_verification_ttl_seconds != 30 * 60:
+            raise ValueError("Client verification links must expire after 30 minutes")
+        if self.client_booking_token_ttl_seconds < 60 * 60:
+            raise ValueError("Client booking tokens must last at least one hour")
         for url in (self.frontend_auth_success_url, self.frontend_auth_error_url):
             if url is not None and url not in self.frontend_auth_redirect_allowlist:
                 raise ValueError("Configured frontend auth redirects must be in the allowlist")
@@ -85,6 +111,10 @@ class Settings(BaseSettings):
                 "DEFAULT_PSYCHOLOGIST_TIME_ZONE must be a valid IANA time zone"
             ) from exc
         if self.app_env == "production":
+            if self.client_verification_secret_key == "local-development-only-change-me-32":
+                raise ValueError("Production requires a unique CLIENT_VERIFICATION_SECRET_KEY")
+            if verification_url.scheme != "https":
+                raise ValueError("Production verification links must use HTTPS")
             if not self.session_cookie_secure:
                 raise ValueError("Production session cookies must set SESSION_COOKIE_SECURE=true")
             if self.google_redirect_uri and urlsplit(self.google_redirect_uri).scheme != "https":

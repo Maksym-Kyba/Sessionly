@@ -2,9 +2,10 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.booking.models import Booking, BookingStatus
+from app.booking.models import Booking, BookingIdempotencyKey, BookingStatus
 
 
 def get_booking(session: Session, booking_id: UUID, *, lock: bool = False) -> Booking | None:
@@ -69,3 +70,55 @@ def payable_booking(session: Session, booking_id: UUID) -> Booking | None:
 
 def get_booking_with_lock(session: Session, booking_id: UUID) -> Booking | None:
     return session.scalar(select(Booking).where(Booking.id == booking_id).with_for_update())
+
+
+def claim_idempotency_key(
+    session: Session, key_hash: str, request_hash: str
+) -> tuple[BookingIdempotencyKey, bool]:
+    session.execute(
+        insert(BookingIdempotencyKey)
+        .values(key_hash=key_hash, request_hash=request_hash)
+        .on_conflict_do_nothing(index_elements=[BookingIdempotencyKey.key_hash])
+    )
+    record = session.scalar(
+        select(BookingIdempotencyKey)
+        .where(BookingIdempotencyKey.key_hash == key_hash)
+        .with_for_update()
+    )
+    if record is None:
+        raise RuntimeError("Idempotency record could not be loaded")
+    return record, record.booking_id is None
+
+
+def get_client_booking(
+    session: Session, booking_id: UUID, access_token_hash: str
+) -> Booking | None:
+    return session.scalar(
+        select(Booking).where(
+            Booking.id == booking_id,
+            Booking.client_access_token_hash == access_token_hash,
+            Booking.client_access_token_expires_at > func.clock_timestamp(),
+        )
+    )
+
+
+def set_client_access_token(
+    session: Session, booking: Booking, token_hash: str, lifetime_seconds: int
+) -> None:
+    from datetime import timedelta
+
+    booking.client_access_token_hash = token_hash
+    booking.client_access_token_expires_at = func.clock_timestamp() + timedelta(
+        seconds=lifetime_seconds
+    )
+    session.flush()
+    session.refresh(booking)
+
+
+def booking_for_access_recovery(
+    session: Session, booking_id: UUID, *, lock: bool = False
+) -> Booking | None:
+    statement = select(Booking).where(Booking.id == booking_id)
+    if lock:
+        statement = statement.with_for_update()
+    return session.scalar(statement)
