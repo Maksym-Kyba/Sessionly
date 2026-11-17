@@ -13,6 +13,7 @@ from app.booking.schemas import (
     PayableBooking,
     PaymentResult,
     PublicBookingCreation,
+    PsychologistBookingPage,
 )
 from app.notifications.api import InvalidVerificationToken
 
@@ -31,6 +32,7 @@ __all__ = [
     "get_payable_booking",
     "get_client_booking",
     "get_psychologist_booking",
+    "list_psychologist_bookings",
     "recover_client_access_token",
     "create_verified_hold",
 ]
@@ -63,6 +65,19 @@ def get_client_booking(session: Session, booking_id: UUID, access_token: str):
 
 def get_psychologist_booking(session: Session, booking_id: UUID, psychologist_id: UUID):
     return service.get_psychologist_booking(session, booking_id, psychologist_id)
+
+
+def list_psychologist_bookings(
+    session: Session,
+    psychologist_id: UUID,
+    *,
+    limit: int,
+    offset: int,
+    from_: datetime | None = None,
+) -> PsychologistBookingPage:
+    return service.list_psychologist_bookings(
+        session, psychologist_id, limit=limit, offset=offset, from_=from_
+    )
 
 
 def available_slot_ids(
