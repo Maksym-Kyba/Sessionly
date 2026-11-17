@@ -68,9 +68,16 @@ def get_psychologist_booking(session: Session, booking_id: UUID, psychologist_id
 
 
 def list_psychologist_bookings(
-    session: Session, psychologist_id: UUID, *, limit: int, offset: int
+    session: Session,
+    psychologist_id: UUID,
+    *,
+    limit: int,
+    offset: int,
+    from_: datetime | None = None,
 ) -> PsychologistBookingPage:
-    return service.list_psychologist_bookings(session, psychologist_id, limit=limit, offset=offset)
+    return service.list_psychologist_bookings(
+        session, psychologist_id, limit=limit, offset=offset, from_=from_
+    )
 
 
 def available_slot_ids(

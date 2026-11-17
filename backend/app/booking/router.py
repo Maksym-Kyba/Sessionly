@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
@@ -27,11 +28,19 @@ def list_my_bookings(
     response: Response,
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=100_000),
+    from_: datetime | None = Query(default=None, alias="from"),
     psychologist_id: UUID = Depends(get_current_psychologist_id),
     session: Session = Depends(get_db),
 ) -> PsychologistBookingPageRead:
+    if from_ is not None and (from_.tzinfo is None or from_.utcoffset() is None):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="from must be a timezone-aware ISO 8601 datetime",
+        )
     response.headers["Cache-Control"] = "no-store"
-    page = api.list_psychologist_bookings(session, psychologist_id, limit=limit, offset=offset)
+    page = api.list_psychologist_bookings(
+        session, psychologist_id, limit=limit, offset=offset, from_=from_
+    )
     return PsychologistBookingPageRead(
         items=[
             PsychologistBookingRead(

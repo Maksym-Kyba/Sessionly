@@ -16,14 +16,21 @@ def get_booking(session: Session, booking_id: UUID, *, lock: bool = False) -> Bo
 
 
 def psychologist_bookings(
-    session: Session, psychologist_id: UUID, *, limit: int, offset: int
+    session: Session,
+    psychologist_id: UUID,
+    *,
+    limit: int,
+    offset: int,
+    from_: datetime | None = None,
 ) -> tuple[list[Booking], int]:
-    scope = Booking.psychologist_id == psychologist_id
-    total = session.scalar(select(func.count()).select_from(Booking).where(scope)) or 0
+    filters = [Booking.psychologist_id == psychologist_id]
+    if from_ is not None:
+        filters.append(Booking.starts_at >= from_)
+    total = session.scalar(select(func.count()).select_from(Booking).where(*filters)) or 0
     bookings = list(
         session.scalars(
             select(Booking)
-            .where(scope)
+            .where(*filters)
             .order_by(Booking.starts_at.asc(), Booking.id.asc())
             .limit(limit)
             .offset(offset)

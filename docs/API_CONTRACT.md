@@ -300,10 +300,23 @@ booking row.
 `GET /api/v1/accounts/me/bookings` requires a valid psychologist session cookie. It returns only
 bookings whose `psychologist_id` matches that session. No CSRF token is required for this `GET`.
 The response is `Cache-Control: no-store`. Query parameters are `limit` (default `20`, range
-`1`–`100`) and `offset` (default `0`, range `0`–`100000`). Bookings are ordered by `starts_at` ascending,
-then `id` ascending for deterministic ties. `total` is the count of all bookings belonging to the
-authenticated psychologist, before pagination. A `HELD` booking whose `hold_expires_at` has passed
-is represented as `EXPIRED` in this response, consistent with the single-booking read.
+`1`–`100`), `offset` (default `0`, range `0`–`100000`), and optional `from`. `from` must be a
+timezone-aware ISO 8601 datetime; UTC timestamps may use a trailing `Z`. When provided, the endpoint
+includes only bookings with `starts_at >= from` (the boundary is inclusive). Malformed or
+timezone-naive values return `422`.
+
+Example, including all psychologist bookings starting at or after the UTC boundary, with the second
+page of up to 20 matching bookings:
+
+```http
+GET /api/v1/accounts/me/bookings?from=2026-11-18T12%3A00%3A00Z&limit=20&offset=20
+```
+
+Bookings are ordered by `starts_at` ascending, then `id` ascending for deterministic ties. `total`
+counts all bookings belonging to the authenticated psychologist that match `from`, before applying
+`limit` and `offset`. Without `from`, the endpoint retains its existing behavior and returns the
+psychologist's full booking history. A `HELD` booking whose `hold_expires_at` has passed is
+represented as `EXPIRED` in this response, consistent with the single-booking read.
 
 Response example:
 

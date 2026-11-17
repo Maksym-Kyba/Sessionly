@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
@@ -213,3 +213,112 @@ async def test_psychologist_bookings_returns_empty_page_and_validates_pagination
     assert response.status_code == 200
     assert response.json() == {"items": [], "total": 0, "limit": 20, "offset": 0}
     assert invalid_page.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_psychologist_bookings_from_filter_is_inclusive_and_paginates_filtered_total(
+    authenticated_client, database_engine, psychologist
+):
+    boundary = datetime.now(UTC).replace(microsecond=0) + timedelta(days=10)
+    before_id, boundary_id, next_id, foreign_id = (
+        UUID(int=value) for value in (101, 102, 103, 104)
+    )
+    with Session(database_engine) as session, session.begin():
+        other_psychologist = Psychologist(
+            display_name="Other Psychologist",
+            email="other-filter@example.test",
+            time_zone="Europe/Kyiv",
+        )
+        session.add(other_psychologist)
+        session.flush()
+        add_booking(
+            session,
+            psychologist.id,
+            booking_id=before_id,
+            starts_at=boundary - timedelta(hours=1),
+            status=BookingStatus.CONFIRMED,
+        )
+        add_booking(
+            session,
+            psychologist.id,
+            booking_id=boundary_id,
+            starts_at=boundary,
+            status=BookingStatus.CONFIRMED,
+        )
+        add_booking(
+            session,
+            psychologist.id,
+            booking_id=next_id,
+            starts_at=boundary + timedelta(hours=1),
+            status=BookingStatus.HELD,
+        )
+        add_booking(
+            session,
+            other_psychologist.id,
+            booking_id=foreign_id,
+            starts_at=boundary,
+            status=BookingStatus.CONFIRMED,
+            client_email="private@example.test",
+        )
+
+    response = await authenticated_client.get(
+        "/api/v1/accounts/me/bookings",
+        params={"from": boundary.isoformat().replace("+00:00", "Z"), "limit": 1, "offset": 1},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    payload = response.json()
+    assert payload["total"] == 2
+    assert payload["limit"] == 1
+    assert payload["offset"] == 1
+    assert [item["id"] for item in payload["items"]] == [str(next_id)]
+    assert str(foreign_id) not in response.text
+    assert "private@example.test" not in response.text
+
+
+@pytest.mark.anyio
+async def test_psychologist_bookings_from_accepts_timezone_offset(
+    authenticated_client, database_engine, psychologist
+):
+    boundary = datetime.now(UTC).replace(microsecond=0) + timedelta(days=10)
+    included_id = UUID(int=201)
+    excluded_id = UUID(int=202)
+    with Session(database_engine) as session, session.begin():
+        add_booking(
+            session,
+            psychologist.id,
+            booking_id=excluded_id,
+            starts_at=boundary - timedelta(hours=1),
+            status=BookingStatus.CONFIRMED,
+        )
+        add_booking(
+            session,
+            psychologist.id,
+            booking_id=included_id,
+            starts_at=boundary,
+            status=BookingStatus.CONFIRMED,
+        )
+
+    offset_boundary = boundary.astimezone(timezone(timedelta(hours=5, minutes=30)))
+    response = await authenticated_client.get(
+        "/api/v1/accounts/me/bookings", params={"from": offset_boundary.isoformat()}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert [item["id"] for item in response.json()["items"]] == [str(included_id)]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "value",
+    ["not-a-datetime", "2026-11-18T12:30:00"],
+    ids=["malformed", "timezone-naive"],
+)
+async def test_psychologist_bookings_rejects_invalid_from_timestamps(authenticated_client, value):
+    response = await authenticated_client.get(
+        "/api/v1/accounts/me/bookings", params={"from": value}
+    )
+
+    assert response.status_code == 422
