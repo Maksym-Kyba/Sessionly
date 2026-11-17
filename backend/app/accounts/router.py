@@ -7,6 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.accounts import api
+from app.accounts import service
 from app.accounts.auth_service import (
     AccountLinkRequired,
     InvalidOAuthTransaction,
@@ -19,7 +20,7 @@ from app.accounts.auth_service import (
     revoke_session,
 )
 from app.accounts.dependencies import get_current_psychologist_id
-from app.accounts.schemas import PsychologistMeRead
+from app.accounts.schemas import PsychologistMeRead, PsychologistProfileUpdate
 from app.accounts.security import csrf_token
 from app.core.config import settings
 from app.core.database import get_db
@@ -147,6 +148,33 @@ def get_me(
     psychologist = api.psychologist_by_id(session, psychologist_id)
     if psychologist is None:
         raise HTTPException(status_code=401, detail="Psychologist authentication required")
+    return PsychologistMeRead(
+        public_id=psychologist.public_id,
+        display_name=psychologist.display_name,
+        email=psychologist.email,
+        time_zone=psychologist.time_zone,
+        csrf_token=csrf_token(raw_token, settings.csrf_secret_key),
+    )
+
+
+@router.patch("/accounts/me", response_model=PsychologistMeRead)
+def update_me(
+    data: PsychologistProfileUpdate,
+    request: Request,
+    response: Response,
+    psychologist_id: UUID = Depends(get_current_psychologist_id),
+    session: Session = Depends(get_db),
+) -> PsychologistMeRead:
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        psychologist = service.update_psychologist_profile(
+            session, psychologist_id, data.model_dump(exclude_unset=True)
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=401, detail="Psychologist authentication required") from exc
+    if psychologist is None:
+        raise HTTPException(status_code=401, detail="Psychologist authentication required")
+    raw_token = request.cookies.get(settings.session_cookie_name)
     return PsychologistMeRead(
         public_id=psychologist.public_id,
         display_name=psychologist.display_name,

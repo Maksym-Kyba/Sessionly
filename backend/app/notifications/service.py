@@ -5,14 +5,14 @@ from datetime import datetime
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
-from sqlalchemy import delete, func
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.accounts import api as accounts_api
 from app.core.config import settings
 from app.notifications import repository
 from app.notifications.email_sender import EmailDeliveryUnavailable, EmailSender
-from app.notifications.models import BookingVerificationGrant, EmailVerificationToken
+from app.notifications.models import BookingVerificationGrant
 from app.notifications.schemas import VerificationRequest
 
 
@@ -72,10 +72,9 @@ def request_email_verification(
         return
 
     raw_token = secrets.token_urlsafe(32)
+    verification_token_id: UUID | None = None
     with session.begin():
-        # Serialize active-link replacement for a psychologist. Without this lock,
-        # two concurrent requests can each insert a token and fail to see the
-        # other's uncommitted row while deleting older links.
+        # Serialize token creation and consumption on the psychologist row.
         psychologist = accounts_api.psychologist_by_id(session, psychologist_id, lock=True)
         if psychologist is None:
             return
@@ -86,15 +85,33 @@ def request_email_verification(
             _token_hash(raw_token),
             settings.client_verification_ttl_seconds,
         )
-        # Keep only the newest active link for one email/psychologist pair.
-        session.execute(
-            delete(EmailVerificationToken).where(
-                EmailVerificationToken.psychologist_id == psychologist_id,
-                EmailVerificationToken.email == email,
-                EmailVerificationToken.id != token.id,
-                EmailVerificationToken.consumed_at.is_(None),
-            )
-        )
+        verification_token_id = token.id
+
+    if verification_token_id is None:
+        return
+
+    # The token is committed before the network call. Check that it is still
+    # deliverable in a short transaction, then release database locks before SMTP.
+    # A concurrent verification may invalidate this link after the check; sibling
+    # links are intentionally single-use as a group once any one is consumed.
+    should_send = False
+    with session.begin():
+        psychologist = accounts_api.psychologist_by_id(session, psychologist_id, lock=True)
+        token = repository.get_email_verification_by_id(session, verification_token_id, lock=True)
+        now = session.scalar(func.clock_timestamp())
+        if (
+            psychologist is None
+            or token is None
+            or token.psychologist_id != psychologist_id
+            or token.email != email
+            or token.consumed_at is not None
+            or now is None
+            or token.expires_at <= now
+        ):
+            return
+        should_send = True
+
+    if should_send:
         try:
             sender.send_verification(email, _verification_url(raw_token))
         except Exception:
@@ -109,14 +126,25 @@ def consume_email_verification(session: Session, raw_token: str) -> tuple[str, d
     if limited:
         raise VerificationRateLimited
     with session.begin():
-        token = repository.get_email_verification(session, _token_hash(raw_token), lock=True)
-        now = session.scalar(func.clock_timestamp())
-        if token is None or token.consumed_at is not None or now is None or token.expires_at <= now:
+        token = repository.get_email_verification(session, _token_hash(raw_token))
+        if token is None:
             raise InvalidVerificationToken
-        psychologist = accounts_api.psychologist_by_id(session, token.psychologist_id)
+        psychologist = accounts_api.psychologist_by_id(session, token.psychologist_id, lock=True)
         if psychologist is None:
             raise InvalidVerificationToken
-        token.consumed_at = now
+        unconsumed_tokens = repository.get_unconsumed_email_verifications(
+            session, token.psychologist_id, token.email, lock=True
+        )
+        token = next(
+            (item for item in unconsumed_tokens if item.token_hash == _token_hash(raw_token)), None
+        )
+        now = session.scalar(func.clock_timestamp())
+        if token is None or now is None or token.expires_at <= now:
+            raise InvalidVerificationToken
+        # Consuming any valid link invalidates every sibling link for this verified
+        # email and psychologist in the same transaction.
+        for outstanding_token in unconsumed_tokens:
+            outstanding_token.consumed_at = now
         raw_grant = secrets.token_urlsafe(32)
         grant = repository.add_booking_grant(
             session,

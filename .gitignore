@@ -153,6 +153,7 @@ activemq-data/
 .env
 .envrc
 .venv
+/infra/email.env
 env/
 venv/
 ENV/

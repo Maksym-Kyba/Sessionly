@@ -33,6 +33,12 @@ if [ ! -f /opt/sessionly/.env ]; then
   exit 1
 fi
 cp /opt/sessionly/.env infra/.env
+if [ -f /opt/sessionly/email.env ]; then
+  install -m 600 /opt/sessionly/email.env infra/email.env
+else
+  install -m 600 infra/email.env.example infra/email.env
+  echo "Gmail credentials are not configured; verification email delivery will fail closed." >&2
+fi
 
 cd infra
 docker compose -f docker-compose.prod.yml --env-file .env up -d --build --remove-orphans

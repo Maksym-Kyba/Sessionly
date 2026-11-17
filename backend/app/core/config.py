@@ -3,7 +3,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import field_validator, model_validator
+from pydantic import SecretStr, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +12,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 class Settings(BaseSettings):
     app_env: Literal["development", "production"] = "development"
+    email_provider: Literal["development", "gmail_smtp"] = "development"
+    gmail_smtp_username: str | None = None
+    gmail_app_password: SecretStr | None = None
+    gmail_smtp_timeout_seconds: int = Field(default=8, gt=0, le=30)
     database_url: str
     test_database_url: str | None = None
     cors_allowed_origins: list[str] = ["http://localhost:3000"]
