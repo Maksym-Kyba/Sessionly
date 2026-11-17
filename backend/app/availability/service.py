@@ -191,6 +191,14 @@ def list_rules(session: Session, psychologist_id: UUID) -> list[AvailabilityRule
     return repository.list_rules(session, psychologist_id)
 
 
+def refresh_slots(session: Session, psychologist_id: UUID) -> None:
+    if session.in_transaction():
+        _materialize(session, psychologist_id)
+    else:
+        with session.begin():
+            _materialize(session, psychologist_id)
+
+
 def public_slots(
     session: Session, public_id: str, from_time: datetime, to_time: datetime
 ) -> tuple[Psychologist, list[AvailabilitySlot]] | None:
