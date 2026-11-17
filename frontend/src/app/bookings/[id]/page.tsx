@@ -1,15 +1,20 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { type ClientBooking, getClientBooking } from "@/api/booking";
+import { type ClientBooking, getClientBooking, payBookingMock } from "@/api/booking";
+import { errorStatus } from "@/api/errors";
 import { BookingPageShell, Notice } from "@/components/booking/BookingPageShell";
 import { PaymentAction } from "@/components/booking/PaymentAction";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { loadBookingAccess, type StoredBookingAccess } from "@/utils/clientBookingStorage";
+import {
+  loadBookingAccess,
+  newIdempotencyKey,
+  type StoredBookingAccess,
+} from "@/utils/clientBookingStorage";
 import { browserTimeZone, formatCountdown, formatPrice, formatSlot } from "@/utils/format";
 
 type LoadState =
@@ -17,6 +22,16 @@ type LoadState =
   | { status: "no-access" }
   | { status: "error" }
   | { status: "ready"; booking: ClientBooking; access: StoredBookingAccess };
+
+/** Outcome of the latest payment attempt that the page has to explain to the client. */
+type PaymentState =
+  | { status: "idle" }
+  | { status: "paying" }
+  | { status: "failed" }
+  | { status: "manual-review" }
+  | { status: "not-payable" }
+  | { status: "unavailable" }
+  | { status: "error" };
 
 /** Status shown to the client; a held booking past its deadline is displayed as expired. */
 type DisplayStatus = "HELD" | "CONFIRMED" | "EXPIRED";
@@ -43,6 +58,11 @@ export default function BookingStatusPage() {
   const { id } = useParams<{ id: string }>();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadCounter, setReloadCounter] = useState(0);
+  const [payment, setPayment] = useState<PaymentState>({ status: "idle" });
+  // One key per payment attempt. It is reused when retrying after a network error, so that the
+  // backend replays the stored result instead of charging twice, and replaced after a definitive
+  // failed result, so that the client can try again.
+  const paymentKey = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,6 +124,39 @@ export default function BookingStatusPage() {
   }
 
   const { booking, access } = state;
+
+  async function handlePay() {
+    if (payment.status === "paying") return;
+    paymentKey.current ??= newIdempotencyKey();
+    setPayment({ status: "paying" });
+    try {
+      const result = await payBookingMock(booking.id, access.token, paymentKey.current);
+      if (result.payment_status === "succeeded") {
+        paymentKey.current = null;
+        setPayment({ status: "idle" });
+        setReloadCounter((value) => value + 1);
+      } else if (result.payment_status === "manual_review") {
+        setPayment({ status: "manual-review" });
+        setReloadCounter((value) => value + 1);
+      } else if (result.payment_status === "failed") {
+        paymentKey.current = null;
+        setPayment({ status: "failed" });
+      } else {
+        setPayment({ status: "error" });
+      }
+    } catch (error) {
+      const status = errorStatus(error);
+      if (status === 409) {
+        // Already confirmed, expired, or another attempt is in progress: show the current state.
+        setPayment({ status: "not-payable" });
+        setReloadCounter((value) => value + 1);
+      } else if (status === 404) {
+        setPayment({ status: "unavailable" });
+      } else {
+        setPayment({ status: "error" });
+      }
+    }
+  }
   const timeZone = access.timeZone || browserTimeZone() || "UTC";
   const remainingMs = new Date(booking.hold_expires_at).getTime() - now;
   const displayStatus: DisplayStatus =
@@ -153,11 +206,41 @@ export default function BookingStatusPage() {
                 Оплатіть консультацію до завершення відліку, інакше бронювання буде скасовано.
               </p>
             </div>
-            <PaymentAction amountLabel={price} />
+            {payment.status === "failed" && (
+              <Notice tone="danger">Оплата не пройшла. Спробуйте ще раз.</Notice>
+            )}
+            {payment.status === "not-payable" && (
+              <Notice tone="warning">
+                Це бронювання вже не можна оплатити. Ми оновили його статус.
+              </Notice>
+            )}
+            {payment.status === "unavailable" && (
+              <Notice tone="warning">
+                Оплата зараз недоступна. Спробуйте пізніше або зверніться до психолога напряму.
+              </Notice>
+            )}
+            {payment.status === "error" && (
+              <Notice tone="danger">
+                Не вдалося провести оплату. Перевірте з’єднання з інтернетом і спробуйте ще раз.
+              </Notice>
+            )}
+            <PaymentAction
+              amountLabel={price}
+              onPay={handlePay}
+              pending={payment.status === "paying"}
+            />
           </>
         )}
 
-        {displayStatus === "EXPIRED" && (
+        {payment.status === "manual-review" && displayStatus !== "CONFIRMED" && (
+          <Notice tone="warning">
+            Оплату отримано, але час бронювання вже минув, тому запис не підтверджено автоматично.
+            Психолог перевірить оплату вручну та зв’яжеться з вами щодо запису або повернення
+            коштів.
+          </Notice>
+        )}
+
+        {displayStatus === "EXPIRED" && payment.status !== "manual-review" && (
           <div className="flex flex-col gap-4">
             <Notice tone="warning">
               15 хвилин на оплату минули, тому цей час знову доступний для запису. Ви можете обрати

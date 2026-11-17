@@ -100,3 +100,44 @@ export async function getClientBooking(
   }
   return (await response.json()) as ClientBooking;
 }
+
+/** Payment attempt as returned by `POST /api/v1/bookings/{id}/payments/mock`. */
+export type MockPayment = {
+  payment_id: string;
+  booking_id: string;
+  /** `manual_review` means the charge succeeded but the booking could not be confirmed. */
+  payment_status: "pending" | "succeeded" | "failed" | "manual_review";
+  booking_decision: "CONFIRMED" | "ALREADY_CONFIRMED" | "EXPIRED" | "NOT_CONFIRMABLE" | null;
+  amount_minor: number;
+  currency: string;
+  idempotent_replay: boolean;
+};
+
+/**
+ * Runs a development mock payment for a held booking. The amount always comes from the booking on
+ * the backend. Repeating a request with the same `idempotencyKey` returns the stored result
+ * instead of charging again, so the same key must be reused when retrying after a network error.
+ */
+export async function payBookingMock(
+  bookingId: string,
+  accessToken: string,
+  idempotencyKey: string,
+): Promise<MockPayment> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/bookings/${encodeURIComponent(bookingId)}/payments/mock`,
+    {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        ...JSON_HEADERS,
+        Authorization: `Bearer ${accessToken}`,
+        "Idempotency-Key": idempotencyKey,
+      },
+      body: JSON.stringify({ result: "success" }),
+    },
+  );
+  if (!response.ok) {
+    throw new ApiError("/bookings/{id}/payments/mock", response.status);
+  }
+  return (await response.json()) as MockPayment;
+}
