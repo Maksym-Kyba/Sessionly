@@ -1,6 +1,5 @@
-import { Button, GoogleMark } from "@/components/ui/Button";
+import { HeaderAccountButton } from "@/components/landing/HeaderAccountButton";
 import { Logo } from "@/components/ui/Logo";
-import { GOOGLE_SIGN_IN_URL } from "@/config/api";
 
 /** Top navigation of the public landing page. */
 export function SiteHeader() {
@@ -16,11 +15,7 @@ export function SiteHeader() {
             Як це працює
           </a>
         </nav>
-        <Button href={GOOGLE_SIGN_IN_URL} variant="google" size="sm">
-          <GoogleMark />
-          <span className="sm:hidden">Увійти</span>
-          <span className="hidden sm:inline">Увійти через Google</span>
-        </Button>
+        <HeaderAccountButton />
       </div>
     </header>
   );
