@@ -1,4 +1,6 @@
 from contextlib import contextmanager
+import hashlib
+import secrets
 from datetime import datetime
 from typing import Iterator, Sequence
 from uuid import UUID
@@ -9,15 +11,19 @@ from sqlalchemy.orm import Session
 
 from app.accounts import api as accounts_api
 from app.availability import api as availability_api
+from app.core.config import settings
 from app.booking import repository
 from app.booking.models import Booking, BookingStatus
 from app.booking.schemas import (
     BookingConflict,
     BookingHold,
+    ClientBooking,
     ConfirmationOutcome,
     PayableBooking,
     PaymentResult,
+    PublicBookingCreation,
 )
+from app.notifications import api as notifications_api
 
 
 @contextmanager
@@ -175,3 +181,197 @@ def available_slot_ids(
         if booking_start < ends_at and starts_at < booking_end
     }
     return {slot_id for slot_id, _, _ in slots} - unavailable
+
+
+class IdempotencyConflict(Exception):
+    """Raised when an idempotency key is reused for a different request."""
+
+
+def _token_hash(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def _booking_creation(booking: Booking, token: str | None, replay: bool) -> PublicBookingCreation:
+    return PublicBookingCreation(
+        id=booking.id,
+        availability_slot_id=booking.availability_slot_id,
+        psychologist_id=booking.psychologist_id,
+        starts_at=booking.starts_at,
+        ends_at=booking.ends_at,
+        session_duration_minutes=booking.session_duration_minutes,
+        price_minor=booking.price_minor,
+        currency=booking.currency,
+        status=booking.status,
+        created_at=booking.created_at,
+        hold_expires_at=booking.hold_expires_at,
+        client_access_token=token,
+        access_token_expires_at=booking.client_access_token_expires_at,
+        idempotent_replay=replay,
+    )
+
+
+def create_verified_hold(
+    session: Session,
+    slot_id: UUID,
+    booking_verification_token: str,
+    idempotency_key: str,
+) -> PublicBookingCreation:
+    if not 16 <= len(idempotency_key) <= 128:
+        raise ValueError("Idempotency-Key must contain between 16 and 128 characters")
+    key_hash = _token_hash(idempotency_key)
+    request_hash = _token_hash(str(slot_id))
+    result: PublicBookingCreation
+    with _transaction(session):
+        idempotency_record, is_new = repository.claim_idempotency_key(
+            session, key_hash, request_hash
+        )
+        if idempotency_record.request_hash != request_hash:
+            raise IdempotencyConflict
+        if not is_new and idempotency_record.booking_id is not None:
+            existing = repository.get_booking(session, idempotency_record.booking_id)
+            if existing is None:
+                raise RuntimeError("Idempotent booking record references a missing booking")
+            supplied_grant_hash = _token_hash(booking_verification_token)
+            if idempotency_record.verification_grant_hash == supplied_grant_hash:
+                client_email, _ = notifications_api.validate_consumed_booking_verification(
+                    session, booking_verification_token, existing.psychologist_id
+                )
+                raw_access_token = None
+            else:
+                client_email, _ = notifications_api.consume_booking_verification(
+                    session, booking_verification_token, existing.psychologist_id
+                )
+                raw_access_token = secrets.token_urlsafe(32)
+            if client_email != existing.client_email:
+                raise notifications_api.InvalidVerificationToken
+            psychologist = accounts_api.psychologist_by_id(
+                session, existing.psychologist_id, lock=True
+            )
+            existing = repository.get_booking_with_lock(session, existing.id)
+            now = session.scalar(func.clock_timestamp())
+            if existing is None or psychologist is None or now is None:
+                raise notifications_api.InvalidVerificationToken
+            if existing.status == BookingStatus.HELD and existing.hold_expires_at <= now:
+                existing.status = BookingStatus.EXPIRED
+            if raw_access_token is not None:
+                idempotency_record.verification_grant_hash = supplied_grant_hash
+                repository.set_client_access_token(
+                    session,
+                    existing,
+                    _token_hash(raw_access_token),
+                    settings.client_booking_token_ttl_seconds,
+                )
+            return _booking_creation(existing, raw_access_token, True)
+
+        slot = availability_api.slot_for_booking(session, slot_id)
+        if slot is None:
+            raise BookingConflict("Availability slot is unavailable")
+        client_email, _ = notifications_api.consume_booking_verification(
+            session, booking_verification_token, slot.psychologist_id
+        )
+        hold = create_hold(session, slot_id)
+        booking = repository.get_booking(session, hold.id)
+        if booking is None:
+            raise RuntimeError("Created booking could not be loaded")
+        booking.client_email = client_email
+        raw_access_token = secrets.token_urlsafe(32)
+        repository.set_client_access_token(
+            session,
+            booking,
+            _token_hash(raw_access_token),
+            settings.client_booking_token_ttl_seconds,
+        )
+        idempotency_record.verification_grant_hash = _token_hash(booking_verification_token)
+        idempotency_record.booking_id = booking.id
+        session.flush()
+        result = _booking_creation(booking, raw_access_token, False)
+    return result
+
+
+def recover_client_access_token(
+    session: Session, booking_id: UUID, booking_verification_token: str
+) -> tuple[str, datetime] | None:
+    raw_access_token = secrets.token_urlsafe(32)
+    with _transaction(session):
+        initial_booking = repository.booking_for_access_recovery(session, booking_id)
+        if initial_booking is None:
+            raise notifications_api.InvalidVerificationToken
+        verified_email, psychologist_id = notifications_api.consume_booking_verification(
+            session, booking_verification_token, initial_booking.psychologist_id
+        )
+        psychologist = accounts_api.psychologist_by_id(session, psychologist_id, lock=True)
+        if psychologist is None:
+            raise notifications_api.InvalidVerificationToken
+        booking = repository.booking_for_access_recovery(session, booking_id, lock=True)
+        if (
+            booking is None
+            or booking.psychologist_id != psychologist_id
+            or booking.client_email != verified_email
+        ):
+            raise notifications_api.InvalidVerificationToken
+        repository.set_client_access_token(
+            session,
+            booking,
+            _token_hash(raw_access_token),
+            settings.client_booking_token_ttl_seconds,
+        )
+        return raw_access_token, booking.client_access_token_expires_at
+
+
+def get_client_booking(
+    session: Session, booking_id: UUID, client_access_token: str
+) -> ClientBooking | None:
+    with _transaction(session):
+        token_hash = _token_hash(client_access_token)
+        booking = repository.get_client_booking(session, booking_id, token_hash)
+        if booking is None:
+            return None
+        psychologist = accounts_api.psychologist_by_id(session, booking.psychologist_id, lock=True)
+        if psychologist is None:
+            return None
+        booking = repository.get_booking_with_lock(session, booking_id)
+        now = session.scalar(func.clock_timestamp())
+        if (
+            booking is None
+            or booking.client_access_token_hash != token_hash
+            or booking.client_access_token_expires_at is None
+            or booking.client_access_token_expires_at <= now
+        ):
+            return None
+        if booking.status == BookingStatus.HELD and booking.hold_expires_at <= now:
+            booking.status = BookingStatus.EXPIRED
+            session.flush()
+        return ClientBooking(
+            id=booking.id,
+            status=booking.status,
+            starts_at=booking.starts_at,
+            ends_at=booking.ends_at,
+            session_duration_minutes=booking.session_duration_minutes,
+            price_minor=booking.price_minor,
+            currency=booking.currency,
+            hold_expires_at=booking.hold_expires_at,
+            created_at=booking.created_at,
+        )
+
+
+def get_psychologist_booking(
+    session: Session, booking_id: UUID, psychologist_id: UUID
+) -> ClientBooking | None:
+    booking = repository.get_booking(session, booking_id)
+    if booking is None or booking.psychologist_id != psychologist_id:
+        return None
+    now = session.scalar(func.clock_timestamp())
+    status_value = booking.status
+    if status_value == BookingStatus.HELD and booking.hold_expires_at <= now:
+        status_value = BookingStatus.EXPIRED
+    return ClientBooking(
+        id=booking.id,
+        status=status_value,
+        starts_at=booking.starts_at,
+        ends_at=booking.ends_at,
+        session_duration_minutes=booking.session_duration_minutes,
+        price_minor=booking.price_minor,
+        currency=booking.currency,
+        hold_expires_at=booking.hold_expires_at,
+        created_at=booking.created_at,
+    )

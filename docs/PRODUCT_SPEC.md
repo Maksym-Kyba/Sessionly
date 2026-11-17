@@ -91,6 +91,12 @@ These proposals are not product requirements and need technical review:
 - **PROPOSED:** model Google OAuth identity separately from psychologist profile data.
 - **PROPOSED:** deliver verification links with random, single-use, expiring tokens; store only a
   token hash and consume it once. Delivery provider and token lifetime remain undecided.
+- **Implemented in Booking Phase B:** client email links and booking-verification grants are
+  single-use, hash-only credentials with a 30-minute lifetime. Email verification requests are
+  rate-limited; booking holds begin only after verification and are not extended by it.
+- **Implemented in Booking Phase B:** client booking access uses an opaque token stored as a hash,
+  with a 90-day expiry and email re-verification for recovery. Reissuing a token invalidates the
+  previous token.
 - **Implemented in Booking Phase A:** store `hold_expires_at` as the PostgreSQL statement creation
   time plus 15 minutes; atomically expire stale holds and create a replacement in one transaction.
 - **Implemented in Booking Phase A:** use a PostgreSQL GiST exclusion constraint over psychologist
@@ -111,8 +117,10 @@ See `API_CONTRACT.md` and `DATABASE_DESIGN.md` for more concrete proposals.
 - Which production payment provider, settlement flow and webhook security model will be used?
 - What happens operationally when a late payment is under review, including response time and
   client communication?
-- Which email delivery provider will send verification links? What token lifetime and resend
-  limits are appropriate? How should email link scanners be handled?
+- Which production email delivery provider will send verification links? The local development
+  sender captures links in process memory; production delivery requires a configured provider
+  adapter. The implemented link/grant lifetime, resend limits and fragment-based scanner-safe flow
+  are technical choices and can be revised after team review.
 - What Google OAuth client and registered callback URLs will be used in each environment? Existing
   legacy psychologist rows without a linked Google subject require explicit manual resolution;
   they are never linked automatically by email.

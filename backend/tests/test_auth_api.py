@@ -55,6 +55,8 @@ def test_production_cookie_and_redirect_defaults_are_secure() -> None:
             "https://app.example.test/auth/error",
         ],
         cors_allowed_origins=["https://app.example.test"],
+        client_verification_secret_key="test-client-verification-secret-value-32",
+        client_verification_link_base_url="https://app.example.test/verify-email",
     )
     assert production.session_cookie_secure is True
     assert production.session_cookie_name.startswith("__Host-")
