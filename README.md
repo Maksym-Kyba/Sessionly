@@ -117,30 +117,49 @@ Proposed endpoints and data structures are documented in `docs/API_CONTRACT.md` 
 ### Prerequisites
 
 - Git
-- Python 3.12 or newer
-- uv
+- Python 3.12 or newer and [uv](https://docs.astral.sh/uv/)
+- Node.js 20 or newer and npm
 - Docker and Docker Compose
 
-### Run Locally
+### Quick Start
 
-From the repository root:
+Run each long-running command in its own terminal, from the repository root.
 
 ```bash
+# 1. Environment and database
 cp .env.example .env
-# Keep the sample values for local development, or update the database credentials and URL together.
 docker compose up -d db
-```
 
-In a second terminal, start the backend:
-
-```bash
+# 2. Backend API on http://localhost:8000
 cd backend
 uv sync
 uv run alembic upgrade head
 uv run uvicorn app.main:app --reload --no-access-log
+
+# 3. Frontend on http://localhost:3000 (in a second terminal)
+cd frontend
+npm install
+npm run dev
 ```
 
-Run the Backend tests with an isolated temporary PostgreSQL database:
+Open http://localhost:3000. The sample values in `.env.example` are enough to start both
+applications; psychologist sign-in and real verification emails need the extra settings in
+[Configuration details](#configuration-details). See [`frontend/README.md`](frontend/README.md)
+for frontend scripts and structure.
+
+| Service | Address |
+|---|---|
+| Frontend | http://localhost:3000 |
+| Backend health | http://localhost:8000/health |
+| Backend API documentation | http://localhost:8000/docs |
+| PostgreSQL | `localhost:15432` |
+
+Stop PostgreSQL with `docker compose down`. To remove its persistent local data as well, run
+`docker compose down -v`.
+
+### Run the Tests
+
+Backend tests run against an isolated temporary PostgreSQL database:
 
 ```bash
 cd backend
@@ -151,6 +170,25 @@ uv run --group dev pytest
 The test database fixture creates and drops a uniquely named database using the configured
 `TEST_DATABASE_URL` credentials. The PostgreSQL role therefore needs permission to create
 databases. The test fixture never connects to or modifies the configured application database.
+
+Check the frontend with `npm run lint` and `npm run build` in `frontend/`.
+
+### Try the Booking Flow Locally
+
+1. Sign in as a psychologist with Google (requires the OAuth settings below).
+2. Open "Доступність" on the dashboard and add working hours, session length and price.
+3. Copy the client link from the "Профіль" card and open it in another browser.
+4. Choose a slot, enter an email and open the verification link from the email.
+5. Confirm the booking and pay with the mock payment on the booking page.
+
+With the default `EMAIL_PROVIDER=development`, verification emails are kept in backend memory for
+tests and are not delivered, so step 4 needs Gmail delivery configured as described below. Mock
+payments are enabled automatically when `APP_ENV=development`; set `MOCK_PAYMENTS_ENABLED=true` or
+`false` to override this. The deployed demo enables them explicitly, and no real money moves.
+
+### Configuration Details
+
+#### Psychologist Sign-in
 
 To enable psychologist Google sign-in locally, configure a Google OAuth web client with the exact
 redirect URI `http://localhost:8000/api/v1/auth/google/callback`. Set `GOOGLE_CLIENT_ID`,
@@ -167,6 +205,8 @@ Keep the local frontend redirect allowlist from `.env.example`; configured succe
 must match an allowlist entry exactly. OAuth login returns HTTP 503 until configured. There is no
 development authentication bypass.
 
+#### Client Email Verification and Booking
+
 Client booking verification uses one-time links. In local development, the default email sender
 captures verification URLs in process memory for tests; it does not expose a public link-inspection
 endpoint. The frontend verification page should read the token from the URL fragment, remove it from
@@ -175,6 +215,15 @@ browser history, and POST it to `/api/v1/email-verifications/consume`. Configure
 `CLIENT_VERIFICATION_SECRET_KEY` for each environment. The `.env.example` value is only a local
 placeholder. Email links and booking-verification grants expire after 30 minutes; client booking
 access tokens expire after 90 days and can be replaced after re-verifying the email.
+
+After verification, the frontend sends `POST /api/v1/bookings` with the one-time booking-verification
+token and an `Idempotency-Key` header. The response creates a 15-minute hold and returns a one-time
+client access token. The client then pays with `POST /api/v1/bookings/{booking_id}/payments/mock`,
+authorised by that token; the amount always comes from the booking. A payment that succeeds after
+the hold has expired, or that cannot confirm the booking, goes to manual review instead of
+confirming it. See `docs/API_CONTRACT.md` for the full contract.
+
+#### Email Delivery
 
 For the November 2026 demo, production email uses a dedicated Gmail account through SMTP STARTTLS.
 The account must have 2-Step Verification and an available App Password. Use the account's exact
@@ -192,23 +241,13 @@ For a local real-email smoke test, set `EMAIL_PROVIDER=gmail_smtp`, `GMAIL_SMTP_
 use the in-memory test sender. See [`infra/README.md`](infra/README.md) for dedicated Gmail account
 setup and production deployment instructions.
 
-After verification, the frontend sends `POST /api/v1/bookings` with the one-time booking-verification
-token and an `Idempotency-Key` header. The response creates a 15-minute hold and returns a one-time
-client access token. Payment processing is not part of this branch; the Payments module must
-integrate through Booking's internal API before a payment action is available.
+#### Database
 
 The local PostgreSQL service is available at `127.0.0.1:15432` and maps to port `5432` inside
 the container. `DATABASE_URL` in `.env` is for a backend process running on the host. If the
 backend runs as a Docker Compose service, configure it with
 `postgresql+psycopg://sessionly:sessionly_local@db:5432/sessionly`; `db` is the Compose service name.
 Apply schema changes with `uv run alembic upgrade head` before starting the backend.
-
-- Backend health: http://localhost:8000/health
-- Backend API documentation: http://localhost:8000/docs
-- PostgreSQL: `localhost:15432`
-
-Stop PostgreSQL with `docker compose down`. To remove its persistent local data as well, run
-`docker compose down -v`.
 
 ## Deployment
 
