@@ -295,6 +295,44 @@ booking row.
   token returned by booking creation or an authenticated psychologist session.
 - `GET /api/v1/accounts/me/bookings` — list bookings for the authenticated psychologist.
 
+### Psychologist dashboard bookings
+
+`GET /api/v1/accounts/me/bookings` requires a valid psychologist session cookie. It returns only
+bookings whose `psychologist_id` matches that session. No CSRF token is required for this `GET`.
+The response is `Cache-Control: no-store`. Query parameters are `limit` (default `20`, range
+`1`–`100`) and `offset` (default `0`, range `0`–`100000`). Bookings are ordered by `starts_at` ascending,
+then `id` ascending for deterministic ties. `total` is the count of all bookings belonging to the
+authenticated psychologist, before pagination. A `HELD` booking whose `hold_expires_at` has passed
+is represented as `EXPIRED` in this response, consistent with the single-booking read.
+
+Response example:
+
+```json
+{
+  "items": [
+    {
+      "id": "6e88d567-aeca-477d-a84b-243401925480",
+      "status": "CONFIRMED",
+      "starts_at": "2026-11-18T12:00:00Z",
+      "ends_at": "2026-11-18T12:50:00Z",
+      "client_email": "client@example.test",
+      "session_duration_minutes": 50,
+      "price_minor": 120000,
+      "currency": "UAH",
+      "created_at": "2026-11-15T12:00:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+`client_email` is the email already stored on the booking and is returned only to the psychologist
+who owns that booking. It is `null` if no email is stored. The listed appointment, duration and
+price values come from the immutable booking snapshots. An empty page uses the same shape with
+`items: []` and `total: 0` when the psychologist has no bookings.
+
 Create request (the `idempotency_key` is sent in the `Idempotency-Key` header):
 
 ```json

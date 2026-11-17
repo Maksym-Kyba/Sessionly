@@ -22,6 +22,8 @@ from app.booking.schemas import (
     PayableBooking,
     PaymentResult,
     PublicBookingCreation,
+    PsychologistBooking,
+    PsychologistBookingPage,
 )
 from app.notifications import api as notifications_api
 
@@ -375,3 +377,31 @@ def get_psychologist_booking(
         hold_expires_at=booking.hold_expires_at,
         created_at=booking.created_at,
     )
+
+
+def list_psychologist_bookings(
+    session: Session, psychologist_id: UUID, *, limit: int, offset: int
+) -> PsychologistBookingPage:
+    bookings, total = repository.psychologist_bookings(
+        session, psychologist_id, limit=limit, offset=offset
+    )
+    now = session.scalar(func.clock_timestamp())
+    items = [
+        PsychologistBooking(
+            id=booking.id,
+            status=(
+                BookingStatus.EXPIRED
+                if booking.status == BookingStatus.HELD and booking.hold_expires_at <= now
+                else booking.status
+            ),
+            starts_at=booking.starts_at,
+            ends_at=booking.ends_at,
+            client_email=booking.client_email,
+            session_duration_minutes=booking.session_duration_minutes,
+            price_minor=booking.price_minor,
+            currency=booking.currency,
+            created_at=booking.created_at,
+        )
+        for booking in bookings
+    ]
+    return PsychologistBookingPage(items=items, total=total, limit=limit, offset=offset)

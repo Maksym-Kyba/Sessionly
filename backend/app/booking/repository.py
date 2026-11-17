@@ -15,6 +15,23 @@ def get_booking(session: Session, booking_id: UUID, *, lock: bool = False) -> Bo
     return session.scalar(statement)
 
 
+def psychologist_bookings(
+    session: Session, psychologist_id: UUID, *, limit: int, offset: int
+) -> tuple[list[Booking], int]:
+    scope = Booking.psychologist_id == psychologist_id
+    total = session.scalar(select(func.count()).select_from(Booking).where(scope)) or 0
+    bookings = list(
+        session.scalars(
+            select(Booking)
+            .where(scope)
+            .order_by(Booking.starts_at.asc(), Booking.id.asc())
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+    return bookings, total
+
+
 def expire_stale_holds(session: Session, psychologist_id: UUID) -> int:
     stale_holds = session.scalars(
         select(Booking)
