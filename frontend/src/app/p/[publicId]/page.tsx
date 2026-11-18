@@ -293,7 +293,7 @@ export default function PsychologistPublicPage() {
           </Card>
         </div>
 
-        <Card className="flex flex-col gap-4 p-6 sm:p-8 lg:sticky lg:top-6">
+        <Card className="flex flex-col gap-4 p-6 sm:p-8 lg:sticky lg:top-24">
           <h2 className="text-2xl">Ваше бронювання</h2>
           {!selectedSlot ? (
             <p className="text-muted">Оберіть час у розкладі, щоб продовжити.</p>
