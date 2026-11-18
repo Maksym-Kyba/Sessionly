@@ -128,6 +128,7 @@ Run each long-running command in its own terminal, from the repository root.
 ```bash
 # 1. Environment and database
 cp .env.example .env
+# Keep the sample values for local development, or update the database credentials and URL together.
 docker compose up -d db
 
 # 2. Backend API on http://localhost:8000
@@ -146,6 +147,12 @@ Open http://localhost:3000. The sample values in `.env.example` are enough to st
 applications; psychologist sign-in and real verification emails need the extra settings in
 [Configuration details](#configuration-details). See [`frontend/README.md`](frontend/README.md)
 for frontend scripts and structure.
+
+If you change `POSTGRES_USER`, `POSTGRES_PASSWORD` or `POSTGRES_DB` in `.env`, update the
+credentials in `DATABASE_URL`, `DATABASE_URL_DOCKER` and `TEST_DATABASE_URL` to match.
+
+The frontend calls the backend at `http://localhost:8000` by default. To use another backend URL,
+set `NEXT_PUBLIC_API_URL` in `frontend/.env.local`, not in the root `.env`.
 
 | Service | Address |
 |---|---|
@@ -184,7 +191,8 @@ Check the frontend with `npm run lint` and `npm run build` in `frontend/`.
 With the default `EMAIL_PROVIDER=development`, verification emails are kept in backend memory for
 tests and are not delivered, so step 4 needs Gmail delivery configured as described below. Mock
 payments are enabled automatically when `APP_ENV=development`; set `MOCK_PAYMENTS_ENABLED=true` or
-`false` to override this. The deployed demo enables them explicitly, and no real money moves.
+`false` to override this. Production keeps them disabled by default; the deployed demo enables
+them explicitly, as described in [`infra/README.md`](infra/README.md), and no real money moves.
 
 ### Configuration Details
 
