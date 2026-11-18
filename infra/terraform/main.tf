@@ -50,9 +50,11 @@ resource "aws_vpc_security_group_ingress_rule" "https" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "ssh" {
+  for_each = toset(var.ssh_allowed_cidrs)
+
   security_group_id = aws_security_group.web.id
-  description       = "SSH from the administrator"
-  cidr_ipv4         = var.ssh_allowed_cidr
+  description       = "SSH from an administrator"
+  cidr_ipv4         = each.value
   ip_protocol       = "tcp"
   from_port         = 22
   to_port           = 22

@@ -28,12 +28,33 @@ variable "ssh_public_key_path" {
   default     = "~/.ssh/sessionly.pub"
 }
 
-variable "ssh_allowed_cidr" {
-  description = "CIDR block allowed to connect over SSH, normally your own IP address with /32."
-  type        = string
+variable "ssh_allowed_cidrs" {
+  description = "CIDR blocks allowed to connect over SSH, normally each administrator's own IP address with /32."
+  type        = list(string)
 
   validation {
-    condition     = can(cidrhost(var.ssh_allowed_cidr, 0)) && var.ssh_allowed_cidr != "0.0.0.0/0"
-    error_message = "ssh_allowed_cidr must be a valid CIDR block and must not open SSH to the whole internet."
+    condition     = length(var.ssh_allowed_cidrs) > 0
+    error_message = "ssh_allowed_cidrs must contain at least one CIDR block."
+  }
+
+  # cidrnetmask accepts IPv4 prefixes only, so IPv6 blocks such as ::/0 are rejected.
+  validation {
+    condition = alltrue([
+      for cidr in var.ssh_allowed_cidrs : can(cidrnetmask(cidr)) && cidr != "0.0.0.0/0"
+    ])
+    error_message = "ssh_allowed_cidrs must contain IPv4 CIDR blocks only and must not open SSH to the whole internet."
+  }
+
+  # A canonical block has no host bits set, for example 203.0.113.0/24 rather than 203.0.113.7/24.
+  validation {
+    condition = alltrue([
+      for cidr in var.ssh_allowed_cidrs : try(cidrsubnet(cidr, 0, 0) == cidr, false)
+    ])
+    error_message = "ssh_allowed_cidrs must use canonical network addresses, for example 203.0.113.7/32 or 203.0.113.0/24."
+  }
+
+  validation {
+    condition     = length(distinct(var.ssh_allowed_cidrs)) == length(var.ssh_allowed_cidrs)
+    error_message = "ssh_allowed_cidrs must not contain duplicate entries."
   }
 }
