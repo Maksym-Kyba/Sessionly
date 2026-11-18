@@ -9,16 +9,19 @@ import { Card } from "@/components/ui/Card";
 import { Logo } from "@/components/ui/Logo";
 import { TextField } from "@/components/ui/TextField";
 import { useCurrentPsychologist } from "@/hooks/useCurrentPsychologist";
+import { canonicalTimeZone } from "@/utils/format";
 
 const MAX_NAME_LENGTH = 200;
 
 /**
  * IANA time zones supported by the browser, or an empty list when the browser cannot list them.
  * In that case the page falls back to a text field, and the backend validates the value.
+ * Legacy names such as `Europe/Kiev` are replaced with their current names.
  */
 function supportedTimeZones(): string[] {
   try {
-    return typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
+    if (typeof Intl.supportedValuesOf !== "function") return [];
+    return [...new Set(Intl.supportedValuesOf("timeZone").map(canonicalTimeZone))].sort();
   } catch {
     return [];
   }
