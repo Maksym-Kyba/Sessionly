@@ -91,6 +91,7 @@ async def test_oauth_start_creates_hashed_single_use_state_and_pkce(
     query = parse_qs(urlsplit(response.headers["location"]).query)
     assert query["scope"] == ["openid email profile"]
     assert query["code_challenge_method"] == ["S256"]
+    assert query["prompt"] == ["select_account"]
     assert query["code_challenge"]
     assert "calendar" not in query["scope"][0]
     assert "code_verifier" not in response.headers["location"]

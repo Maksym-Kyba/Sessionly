@@ -93,6 +93,9 @@ def begin_google_login(session: Session, settings: Settings) -> tuple[str, str]:
         "code_challenge": challenge,
         "code_challenge_method": "S256",
         "access_type": "online",
+        # Always show the Google account chooser, so that after signing out a psychologist can
+        # sign in with a different Google account instead of being signed in silently.
+        "prompt": "select_account",
     }
     return f"{GOOGLE_AUTHORIZATION_ENDPOINT}?{urlencode(parameters)}", browser_binding
 
