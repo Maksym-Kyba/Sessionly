@@ -77,6 +77,12 @@ created the infrastructure keeps it; without it, Terraform cannot update or dest
    into the backend container only; the migration and frontend containers do not receive the App
    Password. Neither file is committed.
 
+   Mock payments are disabled by default in production (`APP_ENV=production`). For the controlled
+   demo only, add `MOCK_PAYMENTS_ENABLED=true` to `/opt/sessionly/.env` so that clients can pay
+   with the mock endpoint; no real money moves. Set it back to `MOCK_PAYMENTS_ENABLED=false` (or
+   remove the line) and deploy again after the demo, because while it is enabled any client with a
+   booking access token can confirm a booking without paying.
+
 ### Gmail demo sender
 
 Use a dedicated Google account for Sessionly rather than a teammate's personal account. Enable
