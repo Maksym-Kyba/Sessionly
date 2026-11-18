@@ -51,15 +51,15 @@ const KNOWN_MESSAGES: [string, string][] = [
   ["Only UAH is supported", "Наразі підтримується лише гривня."],
   [
     "overlap with different times, duration, break, or price",
-    "Правило перетинається з іншим правилом цього дня, що має інший час, тривалість, перерву або ціну.",
+    "Ці години перетинаються з іншими робочими годинами цього дня, що мають інший час, тривалість, перерву або ціну.",
   ],
   [
     "different prices for one slot",
-    "Правила, що перетинаються, задають різну ціну для того самого часу.",
+    "Робочі години, що перетинаються, задають різну ціну для того самого часу.",
   ],
   [
     "generate overlapping appointment slots",
-    "Правила створюють сесії, що накладаються одна на одну.",
+    "Робочі години створюють сесії, що накладаються одна на одну.",
   ],
 ];
 
@@ -195,7 +195,7 @@ function describeError(error: unknown): string[] {
     return ["Не вдалося підтвердити запит. Оновіть сторінку й спробуйте ще раз."];
   }
   if (error.status === 404) {
-    return ["Правило не знайдено. Можливо, його вже видалено. Оновіть сторінку."];
+    return ["Ці робочі години не знайдено. Можливо, їх уже видалено. Оновіть сторінку."];
   }
   if (Array.isArray(error.detail)) {
     const messages = error.detail.map((issue) => {
@@ -213,7 +213,7 @@ function describeError(error: unknown): string[] {
     if (known) return [known];
   }
   if (error.status === 409) {
-    return ["Правило конфліктує з наявними правилами доступності."];
+    return ["Ці години конфліктують з іншими вашими робочими годинами."];
   }
   if (error.status === 422) {
     return ["Перевірте введені дані."];
@@ -348,7 +348,7 @@ export default function AvailabilityPage() {
 
   async function handleDelete(rule: AvailabilityRule) {
     const label = `${WEEKDAYS[rule.weekday]}, ${shortTime(rule.local_start)}–${shortTime(rule.local_end)}`;
-    if (!window.confirm(`Видалити правило «${label}»?`)) return;
+    if (!window.confirm(`Видалити робочі години «${label}»?`)) return;
     setDeletingId(rule.id);
     setListError([]);
     try {
@@ -382,13 +382,13 @@ export default function AvailabilityPage() {
               часовим поясом: {psychologist.time_zone}.
             </p>
           </div>
-          {!form && <Button onClick={startCreate}>Додати правило</Button>}
+          {!form && <Button onClick={startCreate}>Додати робочі години</Button>}
         </div>
 
         {form && (
           <Card className="mt-8 p-6">
             <h2 className="text-xl text-ink">
-              {editingId ? "Редагування правила" : "Нове правило"}
+              {editingId ? "Редагування робочих годин" : "Нові робочі години"}
             </h2>
             <form onSubmit={handleSubmit} className="mt-5" noValidate>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -470,7 +470,7 @@ export default function AvailabilityPage() {
                   id="rule-valid-until"
                   label="Діє до"
                   type="date"
-                  hint="Залиште порожнім, якщо правило діє безстроково."
+                  hint="Залиште порожнім, якщо ці години діють безстроково."
                   value={form.validUntil}
                   onChange={(event) => updateField("validUntil", event.target.value)}
                 />
@@ -512,19 +512,19 @@ export default function AvailabilityPage() {
         )}
 
         <section className="mt-10">
-          {rulesState.status === "loading" && <p className="text-muted">Завантаження правил…</p>}
+          {rulesState.status === "loading" && <p className="text-muted">Завантаження робочих годин…</p>}
 
           {rulesState.status === "error" && (
             <p role="alert" className="rounded-xl bg-danger-50 px-4 py-3 text-danger-700">
-              Не вдалося завантажити правила доступності. Оновіть сторінку або спробуйте пізніше.
+              Не вдалося завантажити робочі години. Оновіть сторінку або спробуйте пізніше.
             </p>
           )}
 
           {rulesState.status === "loaded" && rulesState.rules.length === 0 && (
             <Card className="p-6">
-              <h2 className="text-xl text-ink">Правил ще немає</h2>
+              <h2 className="text-xl text-ink">Робочих годин ще немає</h2>
               <p className="mt-3 text-muted">
-                Додайте перше правило, щоб клієнти могли бронювати сесії у вибрані години.
+                Додайте робочі години, щоб клієнти могли бронювати сесії.
               </p>
             </Card>
           )}
