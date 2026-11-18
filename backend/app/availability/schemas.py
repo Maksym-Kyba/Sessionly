@@ -10,6 +10,9 @@ class AvailabilityRuleInput(BaseModel):
     local_start: time
     local_end: time
     session_duration_minutes: int = Field(gt=0, le=1440)
+    break_minutes: int = Field(
+        default=0, ge=0, le=240, description="Break after each session before the next slot"
+    )
     price_minor: int = Field(ge=0, le=2_147_483_647)
     currency: str = "UAH"
     valid_from: date

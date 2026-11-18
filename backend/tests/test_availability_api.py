@@ -192,6 +192,74 @@ async def test_rule_cannot_have_a_session_longer_than_its_window(authenticated_c
 
 
 @pytest.mark.anyio
+async def test_break_between_sessions_spaces_out_slots(authenticated_client, psychologist):
+    target_day = _target_day()
+    payload = _rule_payload(target_day)
+    payload.update(session_duration_minutes=50, break_minutes=10)
+    response = await authenticated_client.post(
+        "/api/v1/accounts/me/availability-rules", json=payload
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["break_minutes"] == 10
+
+    slots = (await authenticated_client.get(
+        _availability_url(psychologist.public_id, target_day)
+    )).json()["slots"]
+    starts = [datetime.fromisoformat(slot["starts_at"]) for slot in slots]
+    ends = [datetime.fromisoformat(slot["ends_at"]) for slot in slots]
+    assert len(slots) == 2
+    assert all(end - start == timedelta(minutes=50) for start, end in zip(starts, ends))
+    assert starts[1] - starts[0] == timedelta(minutes=60)
+
+
+@pytest.mark.anyio
+async def test_break_defaults_to_zero_and_rejects_invalid_values(
+    authenticated_client, psychologist
+):
+    target_day = _target_day()
+    payload = _rule_payload(target_day)
+    payload["session_duration_minutes"] = 50
+    response = await authenticated_client.post(
+        "/api/v1/accounts/me/availability-rules", json=payload
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["break_minutes"] == 0
+
+    slots = (await authenticated_client.get(
+        _availability_url(psychologist.public_id, target_day)
+    )).json()["slots"]
+    starts = [datetime.fromisoformat(slot["starts_at"]) for slot in slots]
+    assert starts[1] - starts[0] == timedelta(minutes=50)
+
+    for invalid in (-1, 241):
+        invalid_payload = {**_rule_payload(target_day), "break_minutes": invalid}
+        assert (await authenticated_client.post(
+            "/api/v1/accounts/me/availability-rules", json=invalid_payload
+        )).status_code == 422
+
+
+@pytest.mark.anyio
+async def test_update_without_break_keeps_it_and_explicit_zero_resets_it(authenticated_client):
+    payload = {**_rule_payload(_target_day()), "session_duration_minutes": 50, "break_minutes": 10}
+    created = await authenticated_client.post(
+        "/api/v1/accounts/me/availability-rules", json=payload
+    )
+    assert created.status_code == 201, created.text
+    rule_url = f"/api/v1/accounts/me/availability-rules/{created.json()['id']}"
+
+    legacy_payload = {key: value for key, value in payload.items() if key != "break_minutes"}
+    legacy_payload["price_minor"] = 160000
+    kept = await authenticated_client.put(rule_url, json=legacy_payload)
+    assert kept.status_code == 200, kept.text
+    assert kept.json()["break_minutes"] == 10
+    assert kept.json()["price_minor"] == 160000
+
+    reset = await authenticated_client.put(rule_url, json={**legacy_payload, "break_minutes": 0})
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["break_minutes"] == 0
+
+
+@pytest.mark.anyio
 async def test_conflicting_update_rolls_back_rule_and_slot_changes(
     authenticated_client, psychologist
 ):

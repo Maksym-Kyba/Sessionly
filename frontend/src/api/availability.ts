@@ -13,6 +13,8 @@ export type AvailabilityRuleInput = {
   local_start: string;
   local_end: string;
   session_duration_minutes: number;
+  /** Break after each session before the next slot starts, 0–240 minutes. */
+  break_minutes: number;
   price_minor: number;
   currency: "UAH";
   /** ISO date (`YYYY-MM-DD`). */

@@ -179,6 +179,7 @@ their slot records and let the booking module manage their lifecycle.
   "local_start": "09:00:00",
   "local_end": "12:00:00",
   "session_duration_minutes": 50,
+  "break_minutes": 10,
   "price_minor": 120000,
   "currency": "UAH",
   "valid_from": "2026-11-16",
@@ -190,12 +191,18 @@ their slot records and let the booking module manage their lifecycle.
 in the psychologist profile's IANA time zone. Rules generate materialized slots for the next 30
 local calendar days. Price is represented in integer minor units with an ISO 4217 currency code.
 **UAH is the only supported currency in this milestone.**
+`break_minutes` is an optional break after each session, from `0` to `240` minutes, with a default
+of `0`. Slots start every `session_duration_minutes + break_minutes` minutes, and each slot lasts
+exactly `session_duration_minutes`; for example, 50 minutes with a 10-minute break produces slots
+at 09:00–09:50, 10:00–10:50 and 11:00–11:50. A `POST` without `break_minutes` stores `0`. A `PUT`
+without `break_minutes` keeps the stored break, so that clients that predate the field do not reset
+it; a `PUT` with an explicit `break_minutes` value, including `0`, replaces it.
 Rule deletion retires the rule and withdraws its future unbooked slots; slot records remain in the
 database so later booking records are not removed or changed.
 
 **PROPOSED validation:** a session must fit entirely within its same-day rule interval. Active
 rules for the same weekday and intersecting date ranges cannot overlap in local time unless their
-weekly schedule, duration and price are identical. Identical rules are deduplicated during slot
+weekly schedule, duration, break and price are identical. Identical rules are deduplicated during slot
 materialization; different overlapping rules or slots are rejected with `409`. Overnight rules are
 not supported by this proposal because their recurrence weekday/date semantics are unspecified.
 
