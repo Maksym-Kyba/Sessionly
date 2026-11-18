@@ -26,7 +26,15 @@ import {
 } from "@/utils/clientBookingStorage";
 import { verificationErrorMessage } from "@/utils/verificationErrors";
 import { cn } from "@/utils/cn";
-import { browserTimeZone, dayKey, formatDay, formatPrice, formatSlot, formatTime } from "@/utils/format";
+import {
+  browserTimeZone,
+  canonicalTimeZone,
+  dayKey,
+  formatDay,
+  formatPrice,
+  formatSlot,
+  formatTime,
+} from "@/utils/format";
 import { holdSlot } from "@/utils/holdSlot";
 
 /** The backend accepts availability queries of at most 30 days; stay just inside that bound. */
@@ -95,7 +103,8 @@ export default function PsychologistPublicPage() {
         setState({
           status: "ready",
           psychologist,
-          timeZone: availability.time_zone || psychologist.time_zone,
+          // Canonical names on both sides, so that Europe/Kiev and Europe/Kyiv compare as equal.
+          timeZone: canonicalTimeZone(availability.time_zone || psychologist.time_zone),
           slots: availability.slots,
         });
       })
