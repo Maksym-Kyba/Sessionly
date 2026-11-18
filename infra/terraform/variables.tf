@@ -28,12 +28,14 @@ variable "ssh_public_key_path" {
   default     = "~/.ssh/sessionly.pub"
 }
 
-variable "ssh_allowed_cidr" {
-  description = "CIDR block allowed to connect over SSH, normally your own IP address with /32."
-  type        = string
+variable "ssh_allowed_cidrs" {
+  description = "CIDR blocks allowed to connect over SSH, normally each administrator's own IP address with /32."
+  type        = list(string)
 
   validation {
-    condition     = can(cidrhost(var.ssh_allowed_cidr, 0)) && var.ssh_allowed_cidr != "0.0.0.0/0"
-    error_message = "ssh_allowed_cidr must be a valid CIDR block and must not open SSH to the whole internet."
+    condition = length(var.ssh_allowed_cidrs) > 0 && alltrue([
+      for cidr in var.ssh_allowed_cidrs : can(cidrhost(cidr, 0)) && cidr != "0.0.0.0/0"
+    ])
+    error_message = "ssh_allowed_cidrs must contain valid CIDR blocks and must not open SSH to the whole internet."
   }
 }

@@ -35,12 +35,25 @@ The site uses a free `sslip.io` hostname derived from the server's IP address (f
   ssh-keygen -t ed25519 -f ~/.ssh/sessionly -C sessionly-deployer
   ```
 
+If you sign in with `aws login --profile sessionly`, the Terraform AWS provider may not read that
+session and reports "No valid credential sources found". Export the session's temporary credentials
+for the current shell and leave the profile empty:
+
+```bash
+eval "$(aws configure export-credentials --profile sessionly --format env)"
+terraform plan -var 'aws_profile='
+terraform apply -var 'aws_profile='
+```
+
+SSH is allowed only from the addresses in `ssh_allowed_cidrs`. When an administrator's public IP
+address changes, add the new `/32` address to `terraform.tfvars` and apply again.
+
 ## 1. Create the server
 
 ```bash
 cd infra/terraform
 cp terraform.tfvars.example terraform.tfvars
-# Set ssh_allowed_cidr to your public IP address with /32.
+# Set ssh_allowed_cidrs to the public IP address of each administrator, each with /32.
 # Your current address: curl -s https://checkip.amazonaws.com
 terraform init
 terraform plan
