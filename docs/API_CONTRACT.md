@@ -194,7 +194,9 @@ local calendar days. Price is represented in integer minor units with an ISO 421
 `break_minutes` is an optional break after each session, from `0` to `240` minutes, with a default
 of `0`. Slots start every `session_duration_minutes + break_minutes` minutes, and each slot lasts
 exactly `session_duration_minutes`; for example, 50 minutes with a 10-minute break produces slots
-at 09:00–09:50, 10:00–10:50 and 11:00–11:50.
+at 09:00–09:50, 10:00–10:50 and 11:00–11:50. A `POST` without `break_minutes` stores `0`. A `PUT`
+without `break_minutes` keeps the stored break, so that clients that predate the field do not reset
+it; a `PUT` with an explicit `break_minutes` value, including `0`, replaces it.
 Rule deletion retires the rule and withdraws its future unbooked slots; slot records remain in the
 database so later booking records are not removed or changed.
 

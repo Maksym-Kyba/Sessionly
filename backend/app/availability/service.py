@@ -169,7 +169,11 @@ def update_rule(
         rule = repository.get_rule(session, psychologist_id, rule_id, lock=True)
         if rule is None or not rule.is_active:
             return None
-        repository.update_rule_fields(session, rule, data.model_dump())
+        values = data.model_dump()
+        if "break_minutes" not in data.model_fields_set:
+            # A PUT from a client that predates breaks keeps the stored break unchanged.
+            values.pop("break_minutes")
+        repository.update_rule_fields(session, rule, values)
         _validate_rule_overlaps(repository.list_active_rules(session, psychologist_id), rule)
         _materialize(session, psychologist_id)
         session.flush()
