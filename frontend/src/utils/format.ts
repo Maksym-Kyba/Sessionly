@@ -55,10 +55,23 @@ export function formatCountdown(remainingMs: number): string {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-/** Returns the browser time zone, or `null` when it cannot be determined. */
+/** Legacy IANA names that some browsers still report, mapped to their current names. */
+const LEGACY_TIME_ZONES: Record<string, string> = {
+  "Europe/Kiev": "Europe/Kyiv",
+  "Europe/Uzhgorod": "Europe/Kyiv",
+  "Europe/Zaporozhye": "Europe/Kyiv",
+};
+
+/** Returns the current IANA name for a time zone, replacing legacy aliases such as `Europe/Kiev`. */
+export function canonicalTimeZone(timeZone: string): string {
+  return LEGACY_TIME_ZONES[timeZone] ?? timeZone;
+}
+
+/** Returns the browser time zone under its current name, or `null` when it cannot be determined. */
 export function browserTimeZone(): string | null {
   try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone ?? null;
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return timeZone ? canonicalTimeZone(timeZone) : null;
   } catch {
     return null;
   }
