@@ -45,8 +45,44 @@ terraform plan -var 'aws_profile='
 terraform apply -var 'aws_profile='
 ```
 
-SSH is allowed only from the addresses in `ssh_allowed_cidrs`. When an administrator's public IP
-address changes, add the new `/32` address to `terraform.tfvars` and apply again.
+SSH is allowed only from the addresses in `ssh_allowed_cidrs`: canonical IPv4 CIDR blocks,
+normally one `/32` per administrator, without duplicates.
+
+### Change an administrator's IP address safely
+
+Never remove the working address first, or the administrator can lock themselves out.
+
+1. Add the new `/32` address to `ssh_allowed_cidrs` in `terraform.tfvars` and keep the old one.
+2. Run `terraform plan`, check that it only adds one SSH rule, and run `terraform apply`.
+3. Open a new terminal and connect with `ssh -i ~/.ssh/sessionly ubuntu@<public_ip>`.
+4. Only after that connection succeeds, remove the old address and apply again.
+
+If no administrator can connect any more, restore access through the AWS Management Console:
+
+1. Open EC2 → Security Groups → `sessionly-web` → Edit inbound rules.
+2. Add a rule: type SSH, source "My IP", and save. Connect over SSH to confirm access.
+3. Delete that manual rule in the console, add the same address to `terraform.tfvars`, and run
+   `terraform apply`, so that Terraform manages the rule again. A manual rule with the same
+   address would make the apply fail with a duplicate rule error.
+
+### Migrate from the single `ssh_allowed_cidr` variable
+
+Earlier versions used a single `ssh_allowed_cidr` string and a single SSH rule. The rule is now
+created with `for_each`, one instance per address. For each existing Terraform state, before the
+next `plan`:
+
+1. In the ignored `terraform.tfvars`, rename `ssh_allowed_cidr = "<cidr>"` to
+   `ssh_allowed_cidrs = ["<cidr>"]`.
+2. Move the existing rule to its keyed address, so that Terraform does not delete and recreate it:
+
+   ```bash
+   terraform state mv 'aws_vpc_security_group_ingress_rule.ssh' \
+     'aws_vpc_security_group_ingress_rule.ssh["<cidr>"]'
+   ```
+
+3. Run `terraform plan` and check that it does not replace the existing SSH rule.
+
+The demo server's state has already been migrated; do not repeat these steps for it.
 
 ## 1. Create the server
 
