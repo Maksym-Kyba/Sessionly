@@ -28,6 +28,7 @@ const FIELD_LABELS: Record<string, string> = {
   local_start: "Початок",
   local_end: "Кінець",
   session_duration_minutes: "Тривалість сесії",
+  break_minutes: "Перерва між сесіями",
   price_minor: "Вартість",
   currency: "Валюта",
   valid_from: "Діє з",
@@ -49,8 +50,8 @@ const KNOWN_MESSAGES: [string, string][] = [
   ["minute precision", "Час має бути вказано з точністю до хвилини."],
   ["Only UAH is supported", "Наразі підтримується лише гривня."],
   [
-    "overlap with different times, duration, or price",
-    "Правило перетинається з іншим правилом цього дня, що має інший час, тривалість або ціну.",
+    "overlap with different times, duration, break, or price",
+    "Правило перетинається з іншим правилом цього дня, що має інший час, тривалість, перерву або ціну.",
   ],
   [
     "different prices for one slot",
@@ -67,6 +68,7 @@ type FormValues = {
   localStart: string;
   localEnd: string;
   durationMinutes: string;
+  breakMinutes: string;
   priceUah: string;
   validFrom: string;
   validUntil: string;
@@ -92,6 +94,7 @@ function emptyForm(timeZone: string): FormValues {
     localStart: "09:00",
     localEnd: "17:00",
     durationMinutes: "50",
+    breakMinutes: "10",
     priceUah: "",
     validFrom: todayIn(timeZone),
     validUntil: "",
@@ -109,6 +112,7 @@ function formFromRule(rule: AvailabilityRule): FormValues {
     localStart: shortTime(rule.local_start),
     localEnd: shortTime(rule.local_end),
     durationMinutes: String(rule.session_duration_minutes),
+    breakMinutes: String(rule.break_minutes ?? 0),
     priceUah: minorToPriceInput(rule.price_minor),
     validFrom: rule.valid_from,
     validUntil: rule.valid_until ?? "",
@@ -153,6 +157,10 @@ function toInput(values: FormValues): AvailabilityRuleInput | string {
   if (!Number.isInteger(duration) || duration <= 0) {
     return "Тривалість сесії має бути цілим додатним числом хвилин.";
   }
+  const breakMinutes = Number(values.breakMinutes || "0");
+  if (!Number.isInteger(breakMinutes) || breakMinutes < 0 || breakMinutes > 240) {
+    return "Перерва між сесіями має бути цілим числом хвилин від 0 до 240.";
+  }
   const priceMinor = parsePriceMinor(values.priceUah);
   if (priceMinor === null) {
     return "Вкажіть вартість у гривнях: ціле число або не більше двох знаків після коми, наприклад 1200 або 1200,50.";
@@ -165,6 +173,7 @@ function toInput(values: FormValues): AvailabilityRuleInput | string {
     local_start: values.localStart,
     local_end: values.localEnd,
     session_duration_minutes: duration,
+    break_minutes: breakMinutes,
     price_minor: priceMinor,
     currency: "UAH",
     valid_from: values.validFrom,
@@ -429,6 +438,17 @@ export default function AvailabilityPage() {
                   onChange={(event) => updateField("durationMinutes", event.target.value)}
                 />
                 <TextField
+                  id="rule-break"
+                  label="Перерва між сесіями, хв"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={240}
+                  step={1}
+                  value={form.breakMinutes}
+                  onChange={(event) => updateField("breakMinutes", event.target.value)}
+                />
+                <TextField
                   id="rule-price"
                   label="Вартість сесії, грн"
                   type="text"
@@ -531,6 +551,10 @@ export default function AvailabilityPage() {
                     <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[15px]">
                       <dt className="text-muted">Сесія</dt>
                       <dd className="text-ink">{rule.session_duration_minutes} хв</dd>
+                      <dt className="text-muted">Перерва</dt>
+                      <dd className="text-ink">
+                        {rule.break_minutes > 0 ? `${rule.break_minutes} хв` : "без перерви"}
+                      </dd>
                       <dt className="text-muted">Вартість</dt>
                       <dd className="text-ink">{formatPrice(rule.price_minor)}</dd>
                       <dt className="text-muted">Діє</dt>

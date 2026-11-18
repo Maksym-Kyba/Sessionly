@@ -52,13 +52,14 @@ def _rule_occurrences(
             if window_start_utc is not None and window_end_utc is not None:
                 local_start = local_window_start
                 duration = timedelta(minutes=rule.session_duration_minutes)
+                step = duration + timedelta(minutes=rule.break_minutes or 0)
                 while local_start + duration <= local_window_end:
                     slot_start = resolve_local_datetime(local_start, zone)
                     if slot_start is not None:
                         slot_end = slot_start + duration
                         if slot_end <= window_end_utc:
                             yield slot_start, slot_end
-                    local_start += duration
+                    local_start += step
         day += timedelta(days=1)
 
 
@@ -86,6 +87,7 @@ def _same_weekly_schedule(first: AvailabilityRule, second: AvailabilityRule) -> 
         and first.local_start == second.local_start
         and first.local_end == second.local_end
         and first.session_duration_minutes == second.session_duration_minutes
+        and first.break_minutes == second.break_minutes
         and first.price_minor == second.price_minor
         and first.currency == second.currency
     )
@@ -106,7 +108,7 @@ def _validate_rule_overlaps(
         )
         if wall_times_overlap and not _same_weekly_schedule(rule, other):
             raise AvailabilityConflict(
-                "Availability rules overlap with different times, duration, or price"
+                "Availability rules overlap with different times, duration, break, or price"
             )
 
 

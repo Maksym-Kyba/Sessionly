@@ -26,6 +26,9 @@ class AvailabilityRule(Base):
     __table_args__ = (
         CheckConstraint("weekday BETWEEN 0 AND 6", name="ck_availability_rules_weekday"),
         CheckConstraint("session_duration_minutes > 0", name="ck_availability_rules_duration"),
+        CheckConstraint(
+            "break_minutes BETWEEN 0 AND 240", name="ck_availability_rules_break"
+        ),
         CheckConstraint("price_minor >= 0", name="ck_availability_rules_price"),
         CheckConstraint("currency = 'UAH'", name="ck_availability_rules_currency"),
         CheckConstraint(
@@ -46,6 +49,9 @@ class AvailabilityRule(Base):
     local_start: Mapped[time] = mapped_column(Time(timezone=False), nullable=False)
     local_end: Mapped[time] = mapped_column(Time(timezone=False), nullable=False)
     session_duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    break_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     price_minor: Mapped[int] = mapped_column(Integer, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="UAH", server_default="UAH")
     valid_from: Mapped[date] = mapped_column(Date, nullable=False)
